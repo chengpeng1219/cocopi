@@ -1,0 +1,43 @@
+[
+  {
+    "id": "display-vo-init-failed",
+    "patterns": ["VO init failed", "SAMPLE_COMM_VO_StartVO failed", "display.Display()"],
+    "category": "display",
+    "cause": "launcher、摄像头或多媒体服务仍占用显示层。",
+    "fix": "先停止 launcher.service、llm-tokenizer.service、sensevoice.service 和残留用户程序，再初始化 display.Display()。",
+    "example": "systemctl stop llm-tokenizer.service sensevoice.service; systemctl stop launcher.service"
+  },
+  {
+    "id": "syntax-null-byte",
+    "patterns": ["source code cannot contain null bytes", "invalid non-printable character"],
+    "category": "transport",
+    "cause": "下发源码被截断、编码错误或被写入了二进制数据。",
+    "fix": "使用文件传输接口上传 UTF-8 Python 源码，不要把大段源码直接拼入 shell 命令。",
+    "example": "adb.sync().write({ filename: '/root/user_latest_code.py', file })"
+  },
+  {
+    "id": "adb-device-busy",
+    "patterns": ["device is already in used", "DeviceBusyError"],
+    "category": "adbusb",
+    "cause": "WebUSB ADB Interface 已被另一个程序、浏览器标签页或其他 ADB 工具占用。",
+    "fix": "关闭官方网页、MaixVision、CocoBuddy 和其他 ADB 工具后重新连接。",
+    "example": "关闭占用 ADB 的标签页，再调用 AdbDaemonWebUsbDeviceManager.requestDevice()"
+  },
+  {
+    "id": "nameerror-undefined",
+    "patterns": ["NameError", "is not defined"],
+    "category": "python",
+    "cause": "变量或 API 名称错误，常见于模型对象、屏幕尺寸或导入缺失。",
+    "fix": "根据 traceback 行号补齐导入和变量初始化，并使用知识库中的完整可运行样例。",
+    "example": "from maix import display, image, camera, app"
+  },
+  {
+    "id": "camera-open-failed",
+    "patterns": ["camera.Camera", "Camera open failed", "camera init"],
+    "category": "camera",
+    "cause": "摄像头被 launcher 或其他程序占用，或分辨率/设备参数不兼容。",
+    "fix": "先释放多媒体服务，再使用 camera.Camera(640, 480) 初始化。",
+    "example": "cam = camera.Camera(640, 480)"
+  }
+]
+
