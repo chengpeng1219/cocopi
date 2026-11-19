@@ -1,19 +1,16 @@
 import { Adb, AdbDaemonTransport } from '@yume-chan/adb';
 import { AdbDaemonWebUsbDeviceManager } from '@yume-chan/adb-daemon-webusb';
 import AdbWebCredentialStore from '@yume-chan/adb-credential-web';
-import { ReadableStream } from '@yume-chan/stream-extra';
-import { DEPLOY_RESULT_MARKER, STOP_RESULT_MARKER } from './maixRuntime.js';
-
-const STOP_COMMAND =
-  "pkill -f '/root/[e]vent.py' 2>/dev/null || true; " +
-  "pkill -f '/root/[c]ocopi_run.py' 2>/dev/null || true; " +
-  "pkill -f '/root/[u]ser_latest_code.py' 2>/dev/null || true; " +
-  'systemctl stop llm-tokenizer.service sensevoice.service; ' +
-  'systemctl start launcher.service && sleep 2 && echo __COCOPI_LAUNCHER_OK__';
-
-function bytesToText(bytes) {
-  return new TextDecoder('utf-8', { fatal: false }).decode(bytes);
-}
+import {
+  DEPLOY_RESULT_MARKER,
+  STOP_RESULT_MARKER,
+  SHELL_CWD_MARKER,
+  SHELL_EXIT_MARKER,
+  buildDeploymentScript,
+  buildSafeStopProgramScript,
+  buildUploadProgramScript,
+  buildPortablePythonCommand
+} from './maixRuntime.js';
 
 export class YaWebAdbClient {
   constructor({ onLog, onDisconnect } = {}) {
@@ -22,8 +19,6 @@ export class YaWebAdbClient {
     this.adb = null;
     this.device = null;
     this.credentialStore = null;
-    this.programProcess = null;
-    this.stoppingProgram = false;
     this.closed = false;
   }
 
@@ -84,7 +79,6 @@ export class YaWebAdbClient {
 
     this.adb.disconnected.then(() => {
       if (this.closed) return;
-      this.programProcess = null;
       this.adb = null;
       this.onDisconnect();
     });
@@ -96,7 +90,7 @@ export class YaWebAdbClient {
     };
   }
 
-  async runShellCommand(command, timeoutMs = 15_000) {
+  async runShellCommand(command, timeoutMs = 15_000, { onOutput, stopMarker = '' } = {}) {
     if (!this.adb) {
       throw new Error('设备未连接');
     }
@@ -114,14 +108,51 @@ export class YaWebAdbClient {
       const reader = process.output.getReader();
       const decoder = new TextDecoder('utf-8', { fatal: false });
       let output = '';
+      let pending = '';
+      let markerReceived = false;
+
+      const emitLines = (flush = false) => {
+        if (!onOutput) return;
+        const lines = pending.split(/\r?\n/);
+        pending = flush ? '' : lines.pop() || '';
+        lines
+          .filter(
+            (line) =>
+              line.trim() &&
+              !line.startsWith(SHELL_CWD_MARKER) &&
+              !line.startsWith(SHELL_EXIT_MARKER)
+          )
+          .forEach((line) => onOutput(line));
+      };
 
       while (true) {
         const result = await reader.read();
         if (result.done) break;
-        output += decoder.decode(result.value, { stream: true });
+        const text = decoder.decode(result.value, { stream: true });
+        output += text;
+        pending += text;
+        emitLines();
+        if (stopMarker) {
+          const markerIndex = output.lastIndexOf(stopMarker);
+          const markerEnd = markerIndex >= 0 ? output.indexOf('\n', markerIndex) : -1;
+          if (markerIndex >= 0 && markerEnd > markerIndex) {
+            markerReceived = true;
+            try {
+              await process.kill();
+            } catch (_) {
+              // The remote process may have already exited after printing the marker.
+            }
+            break;
+          }
+        }
       }
-      output += decoder.decode();
-      await process.exited;
+      const tail = decoder.decode();
+      output += tail;
+      pending += tail;
+      emitLines(true);
+      if (!markerReceived) {
+        await process.exited;
+      }
       return {
         output,
         timedOut: false
@@ -136,8 +167,18 @@ export class YaWebAdbClient {
     }
   }
 
-  async execShellCommand(command, timeoutMs = 15_000, { silent = false } = {}) {
-    const result = await this.runShellCommand(command, timeoutMs);
+  async execShellCommand(
+    command,
+    timeoutMs = 15_000,
+    { silent = false, onOutput, stopMarker = '' } = {}
+  ) {
+    const result = await this.runShellCommand(command, timeoutMs, {
+      onOutput: (line) => {
+        if (!silent) this.onLog(line, 'device');
+        onOutput?.(line);
+      },
+      stopMarker
+    });
     if (!silent && result.output.trim()) {
       result.output
         .trim()
@@ -147,73 +188,27 @@ export class YaWebAdbClient {
     return result.output;
   }
 
-  async uploadTextFile(filename, text) {
-    if (!this.adb) throw new Error('设备未连接');
-
-    const sync = await this.adb.sync();
-    try {
-      const bytes = new TextEncoder().encode(String(text ?? ''));
-      const file = new ReadableStream({
-        start(controller) {
-          controller.enqueue(bytes);
-          controller.close();
-        }
-      });
-      await sync.write({
-        filename,
-        file,
-        mtime: Math.floor(Date.now() / 1000)
-      });
-    } finally {
-      await sync.dispose();
-    }
+  async executePythonScript(source, timeoutMs = 75_000, stopMarker = '') {
+    return this.execShellCommand(buildPortablePythonCommand(source), timeoutMs, {
+      silent: true,
+      stopMarker
+    });
   }
 
-  async listFiles(path = '/root') {
-    if (!this.adb) throw new Error('设备未连接');
-
-    const sync = await this.adb.sync();
-    try {
-      const entries = await sync.readdir(path);
-      return entries
-        .filter((entry) => entry.name !== '.' && entry.name !== '..')
-        .map((entry) => ({
-          name: entry.name,
-          size: Number(entry.size) || 0,
-          mtime: Number(entry.mtime) || 0
-        }));
-    } finally {
-      await sync.dispose();
+  async uploadProgram(pythonCode, filename = 'user_latest_code.py') {
+    if (!this.adb) {
+      throw new Error('设备未连接');
     }
-  }
-
-  async consumeProgramOutput(process) {
-    const reader = process.output.getReader();
-    const decoder = new TextDecoder('utf-8', { fatal: false });
-    let pending = '';
-
-    try {
-      while (true) {
-        const result = await reader.read();
-        if (result.done) break;
-        pending += decoder.decode(result.value, { stream: true });
-        const lines = pending.split(/\r?\n/);
-        pending = lines.pop() || '';
-        lines.filter(Boolean).forEach((line) => this.onLog(line, 'device'));
-      }
-      pending += decoder.decode();
-      if (pending.trim()) this.onLog(pending.trim(), 'device');
-    } catch (error) {
-      if (!this.closed && !this.stoppingProgram) {
-        this.onLog(`[ADB 输出流] ${error?.message || error}`, 'error');
-      }
-    }
+    return this.executePythonScript(
+      buildUploadProgramScript(pythonCode, filename),
+      20_000
+    );
   }
 
   async deployAndRunMaixProgram(
     pythonCode,
     filename = 'event.py',
-    _previousPid = null,
+    previousPid = null,
     { useExistingFile = false } = {}
   ) {
     if (!this.adb) {
@@ -225,77 +220,11 @@ export class YaWebAdbClient {
     }
 
     try {
-      if (this.programProcess) {
-        this.stoppingProgram = true;
-        try {
-          await this.programProcess.kill();
-        } catch (_) {
-          // The previous process may already have finished.
-        }
-        this.programProcess = null;
-        await new Promise((resolve) => setTimeout(resolve, 200));
-        this.stoppingProgram = false;
-      }
-
-      const remoteName = String(filename || 'event.py').replace(/[^a-zA-Z0-9_.-]/g, '_');
-      const uploadedPath = `/root/${remoteName}`;
-      const targetPath = useExistingFile ? uploadedPath : '/root/user_latest_code.py';
-
-      if (!useExistingFile) {
-        await this.uploadTextFile(targetPath, pythonCode);
-      }
-
-      const compileOutput = await this.execShellCommand(
-        `PY=$(command -v python3 || command -v python); ` +
-          `[ -n "$PY" ] && "$PY" -m py_compile '${targetPath}' && ` +
-          `echo __COCOPI_COMPILE_OK__`,
-        10_000,
-        { silent: true }
-      );
-      if (!compileOutput.includes('__COCOPI_COMPILE_OK__')) {
-        return `${DEPLOY_RESULT_MARKER}${JSON.stringify({
-          ok: false,
-          stage: 'compile',
-          error: 'Python 语法检查未通过',
-          output: compileOutput.slice(-3000)
-        })}`;
-      }
-
-      const stopBeforeRunCommand =
-        `pkill -f '/root/[e]vent.py' 2>/dev/null || true; ` +
-        `pkill -f '/root/[c]ocopi_run.py' 2>/dev/null || true; ` +
-        `pkill -f '/root/[u]ser_latest_code.py' 2>/dev/null || true; ` +
-        `systemctl stop llm-tokenizer.service sensevoice.service; ` +
-        `systemctl stop launcher.service; true`;
-
-      await this.execShellCommand(stopBeforeRunCommand, 12_000, {
-        silent: true
+      const script = buildDeploymentScript(pythonCode, filename, {
+        previousPid,
+        useExistingFile
       });
-
-      const runCommand =
-        `sleep 0.5; ` +
-        `nohup sudo python -u ${targetPath} >/tmp/cocopi_run.log 2>&1 & ` +
-        `sleep 2; ` +
-        `PIDS=$(ps w | awk -v self=$$ -v target='${targetPath}' ` +
-        `'$1 != self && index($0, target) && $0 !~ /awk/ {print $1}'); ` +
-        `if [ -n "$PIDS" ]; then echo __COCOPI_RUNNING__:$PIDS; ` +
-        `else echo __COCOPI_NOT_RUNNING__; fi; ` +
-        `cat /tmp/cocopi_run.log 2>/dev/null`;
-
-      const runOutput = await this.execShellCommand(runCommand, 15_000, {
-        silent: true
-      });
-      const running = runOutput.includes('__COCOPI_RUNNING__');
-      this.programProcess = null;
-
-      return `${DEPLOY_RESULT_MARKER}${JSON.stringify({
-        ok: running,
-        running,
-        target: targetPath,
-        uploaded: targetPath,
-        output: runOutput.slice(-3000),
-        error: running ? '' : '程序启动后未检测到运行进程'
-      })}`;
+      return await this.executePythonScript(script, 30_000, DEPLOY_RESULT_MARKER);
     } catch (error) {
       return `${DEPLOY_RESULT_MARKER}${JSON.stringify({
         ok: false,
@@ -305,7 +234,7 @@ export class YaWebAdbClient {
     }
   }
 
-  async stopRunningPrograms() {
+  async stopRunningPrograms(previousPid = null) {
     if (!this.adb) {
       return `${STOP_RESULT_MARKER}${JSON.stringify({
         ok: false,
@@ -315,52 +244,35 @@ export class YaWebAdbClient {
       })}`;
     }
 
-    let stopError = '';
-    if (this.programProcess) {
-      this.stoppingProgram = true;
-      try {
-        await this.programProcess.kill();
-      } catch (error) {
-        stopError = error?.message || String(error);
-      }
-      this.programProcess = null;
-    }
-
-    let output = '';
     try {
-      output = await this.execShellCommand(STOP_COMMAND, 20_000, { silent: true });
+      const output = await this.executePythonScript(
+        buildSafeStopProgramScript(previousPid),
+        30_000,
+        STOP_RESULT_MARKER
+      );
+      if (output.includes(STOP_RESULT_MARKER)) {
+        return output;
+      }
+      return `${STOP_RESULT_MARKER}${JSON.stringify({
+        ok: false,
+        program_stopped: false,
+        error: '设备未返回停止结果',
+        stopped: [],
+        remaining: []
+      })}`;
     } catch (error) {
-      stopError = error?.message || String(error);
-    } finally {
-      this.stoppingProgram = false;
+      return `${STOP_RESULT_MARKER}${JSON.stringify({
+        ok: false,
+        program_stopped: false,
+        error: error?.message || String(error),
+        stopped: [],
+        remaining: []
+      })}`;
     }
-
-    const launcherStarted = output.includes('__COCOPI_LAUNCHER_OK__');
-    return `${STOP_RESULT_MARKER}${JSON.stringify({
-      ok: launcherStarted,
-      program_stopped: true,
-      stopped: [],
-      remaining: [],
-      launcher: {
-        started: launcherStarted,
-        command: STOP_COMMAND,
-        error: launcherStarted ? '' : 'systemctl start launcher.service 未返回成功标记'
-      },
-      error: stopError,
-      output: output.slice(-3000)
-    })}`;
   }
 
   async close() {
     this.closed = true;
-    if (this.programProcess) {
-      try {
-        await this.programProcess.kill();
-      } catch (_) {
-        // Ignore shutdown errors.
-      }
-      this.programProcess = null;
-    }
     if (this.adb) {
       await this.adb.close();
       this.adb = null;

@@ -1,4 +1,5 @@
 import { MAIXPY_AI_SYSTEM_PROMPT } from '../src/data/maixpy.js';
+import { isIP } from 'node:net';
 import {
   validateMaixPyCode,
   summarizeDeviceOutput
@@ -71,8 +72,57 @@ function getAiConfig(env) {
   };
 }
 
-function checkRateLimit(req) {
-  const key = req.socket?.remoteAddress || 'unknown';
+function normalizeIp(value) {
+  let text = Array.isArray(value) ? value[0] : value;
+  text = String(text || '').trim();
+  if (!text) return '';
+
+  if (text.startsWith('[')) {
+    const closingBracket = text.indexOf(']');
+    if (closingBracket > 0) {
+      const candidate = text.slice(1, closingBracket);
+      if (isIP(candidate)) return candidate;
+    }
+  }
+
+  if (isIP(text)) return text;
+
+  const ipv4WithPort = text.match(/^(\d{1,3}(?:\.\d{1,3}){3}):\d+$/);
+  if (ipv4WithPort && isIP(ipv4WithPort[1])) return ipv4WithPort[1];
+
+  return '';
+}
+
+function isLoopbackAddress(address) {
+  if (address === '::1' || address.startsWith('127.')) return true;
+  return address.startsWith('::ffff:') && address.slice(7).startsWith('127.');
+}
+
+export function getRateLimitKey(req, env = process.env) {
+  const remoteAddress =
+    normalizeIp(req.socket?.remoteAddress) || String(req.socket?.remoteAddress || 'unknown');
+  const explicitTrust = env.AI_TRUST_PROXY;
+  const trustProxy =
+    explicitTrust === '1' ||
+    (explicitTrust !== '0' && isLoopbackAddress(remoteAddress));
+
+  if (trustProxy) {
+    const realIp = normalizeIp(req.headers?.['x-real-ip']);
+    if (realIp) return realIp;
+
+    const forwardedFor = req.headers?.['x-forwarded-for'];
+    const firstForwarded = Array.isArray(forwardedFor)
+      ? forwardedFor[0]
+      : String(forwardedFor || '').split(',')[0];
+    const forwardedIp = normalizeIp(firstForwarded);
+    if (forwardedIp) return forwardedIp;
+  }
+
+  return remoteAddress;
+}
+
+export function checkRateLimit(req, env = process.env) {
+  const key = getRateLimitKey(req, env);
   const now = Date.now();
 
   if (rateBuckets.size > RATE_LIMIT_MAX_BUCKETS) {
@@ -171,7 +221,7 @@ export async function handleAiRequest(req, res, { env = process.env } = {}) {
   }
 
   try {
-    checkRateLimit(req);
+    checkRateLimit(req, env);
     const body = await readJsonBody(req);
     const prompt = String(body.prompt || '').trim();
     const previousCode = String(body.previousCode || '').slice(0, MAX_PREVIOUS_CODE_LENGTH);
@@ -265,6 +315,9 @@ export async function handleAiRequest(req, res, { env = process.env } = {}) {
       return;
     }
     const statusCode = error instanceof RequestError ? error.statusCode : 500;
+    if (statusCode === 429) {
+      res.setHeader('Retry-After', '60');
+    }
     if (statusCode === 500) {
       console.error('[ai-proxy] request failed', error);
     }

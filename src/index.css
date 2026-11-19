@@ -1,17 +1,397 @@
 @import "tailwindcss";
 
-/* 终端与列表暗色滚动条优化 */
+/*
+ * 视觉 token
+ * 单一强调色（accent）+ 一档暖灰底（paper）+ 中性文字分层。
+ * 状态色（ok / warn / danger）只用于表达连接、警告和错误，不参与装饰。
+ */
+@theme {
+  --color-paper: #f4f7fc;
+  --color-surface: #ffffff;
+  --color-surface-sunken: #edf3fb;
+  --color-line: #dce5f1;
+  --color-line-strong: #c5d3e5;
+  --color-ink: #172033;
+  --color-ink-soft: #43516b;
+  --color-ink-dim: #6c7a91;
+
+  --color-accent: #2563eb;
+  --color-accent-soft: #edf4ff;
+  --color-accent-line: #c8dafc;
+  --color-accent-strong: #1d4ed8;
+  --color-accent-hover: #e3efff;
+
+  --color-ok: #1c7c54;
+  --color-ok-line: #bfd8ca;
+  --color-ok-strong: #17664a;
+  --color-ok-soft: #e8f3ed;
+  --color-warn: #9a5b12;
+  --color-warn-soft: #fbf1e3;
+  --color-warn-line: #e6d3b5;
+  --color-warn-hover: #f7e8d3;
+  --color-danger: #a5302c;
+  --color-danger-soft: #fbebea;
+  --color-danger-line: #e8c8c6;
+  --color-danger-hover: #f6dedc;
+
+  --color-console: #12161b;
+  --color-console-deep: #0d1116;
+  --color-console-raised: #1a1f26;
+  --color-console-raised-hover: #232a32;
+  --color-console-line: #2a3138;
+  --color-console-text: #c8d4e0;
+  --color-console-dim: #7d8896;
+  --color-console-accent: #7fb0e8;
+  --color-console-ok: #7fd3a6;
+  --color-console-warn: #f0c987;
+  --color-console-danger: #ff9a94;
+  --color-console-info: #9fb0c2;
+
+  --radius-box: 10px;
+  --radius-control: 8px;
+
+  --font-sans: -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei",
+    "Segoe UI", sans-serif;
+  --font-mono: ui-monospace, "JetBrains Mono", "Cascadia Mono", Consolas, monospace;
+}
+
+html {
+  -webkit-text-size-adjust: 100%;
+}
+
+body {
+  background-color: var(--color-paper);
+  color: var(--color-ink);
+  font-family: var(--font-sans);
+  font-size: 15px;
+  line-height: 1.65;
+}
+
+/* 终端与列表滚动条：与 console 色板一致 */
 ::-webkit-scrollbar {
   width: 6px;
   height: 6px;
 }
 ::-webkit-scrollbar-track {
-  background: #090d16;
+  background: transparent;
 }
 ::-webkit-scrollbar-thumb {
-  background: #334155;
+  background: #cfcbc2;
   border-radius: 9999px;
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: #06b6d4;
+  background: #b3aea4;
+}
+.console-scroll::-webkit-scrollbar-thumb {
+  background: var(--color-console-line);
+}
+.console-scroll::-webkit-scrollbar-thumb:hover {
+  background: var(--color-console-dim);
+}
+
+.maix-blockly {
+  z-index: 0;
+  isolation: isolate;
+}
+
+.maix-blockly .blocklySvg {
+  background: #f8fbff;
+}
+
+.maix-blockly .blocklyMainBackground {
+  stroke: transparent;
+}
+
+.maix-blockly .blocklyToolboxDiv,
+.maix-blockly .blocklyToolbox {
+  z-index: 1;
+  border-right: 1px solid var(--color-accent-line);
+  background: #eef4ff;
+  padding: 8px 6px;
+}
+
+.maix-blockly .blocklyToolbox {
+  display: none !important;
+}
+
+.blockly-workspace-grid {
+  display: grid;
+  grid-template-columns:
+    var(--blockly-left-width, 220px)
+    8px
+    minmax(480px, 1fr)
+    8px
+    var(--blockly-right-width, 390px);
+  gap: 8px;
+  align-items: stretch;
+  min-height: 780px;
+}
+
+.blockly-resize-handle {
+  position: relative;
+  margin: 18px 0;
+  cursor: col-resize;
+}
+
+.blockly-resize-handle::after {
+  content: "";
+  position: absolute;
+  top: 40%;
+  bottom: 40%;
+  left: 3px;
+  width: 2px;
+  border-radius: 2px;
+  background: var(--color-line-strong);
+  transition: top 0.15s, bottom 0.15s, background 0.15s;
+}
+
+.blockly-resize-handle:hover::after,
+.blockly-resize-handle.dragging::after {
+  top: 20%;
+  bottom: 20%;
+  background: var(--color-accent);
+}
+
+.blockly-console-resizer {
+  position: relative;
+  height: 8px;
+  flex: 0 0 8px;
+  cursor: row-resize;
+  border-top: 1px solid var(--color-line);
+  background: #f8fbff;
+}
+
+.blockly-console-resizer::after {
+  content: "";
+  position: absolute;
+  top: 3px;
+  left: 46%;
+  right: 46%;
+  height: 2px;
+  border-radius: 2px;
+  background: var(--color-line-strong);
+}
+
+.blockly-console-resizer:hover::after,
+.blockly-console-resizer.dragging::after {
+  left: 38%;
+  right: 38%;
+  background: var(--color-accent);
+}
+
+.blockly-editor-card {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  min-height: 780px;
+}
+
+.blockly-canvas-wrap {
+  position: relative;
+  min-height: 520px;
+  flex: 1;
+}
+
+.blockly-ai-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 5;
+  overflow-y: auto;
+  background-color: #f8fbff;
+  background-image: radial-gradient(#ccd8e9 1px, transparent 1px);
+  background-size: 24px 24px;
+  padding: 24px;
+}
+
+.blockly-console {
+  height: var(--blockly-console-height, 176px);
+  min-height: 110px;
+  max-height: 380px;
+  flex: 0 0 var(--blockly-console-height, 176px);
+}
+
+.blockly-python-area {
+  font-variant-ligatures: none;
+  tab-size: 4;
+}
+
+@media (max-width: 1279px) {
+  .blockly-workspace-grid {
+    grid-template-columns: 1fr;
+    min-height: 0;
+  }
+
+  .blockly-resize-handle {
+    display: none;
+  }
+
+  .blockly-editor-card {
+    min-height: 680px;
+  }
+
+  .blockly-left-order {
+    order: 2;
+  }
+
+  .blockly-editor-order {
+    order: 1;
+  }
+
+  .blockly-right-order {
+    order: 3;
+  }
+}
+
+.maix-blockly .blocklyTreeRow,
+.maix-blockly .blocklyToolboxCategory {
+  min-height: 32px;
+  margin: 2px 0;
+  border-radius: 7px;
+  padding-left: 4px;
+}
+
+.maix-blockly .blocklyTreeRow:hover,
+.maix-blockly .blocklyToolboxCategory:hover {
+  background: rgba(255, 255, 255, 0.72);
+}
+
+.maix-blockly .blocklyTreeSelected,
+.maix-blockly .blocklyToolboxCategorySelected {
+  background: #ffffff !important;
+  box-shadow: 0 1px 4px rgba(37, 71, 135, 0.12);
+}
+
+.maix-blockly .blocklyTreeLabel,
+.maix-blockly .blocklyToolboxCategoryLabel {
+  color: var(--color-ink-soft);
+  font-family: var(--font-sans);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.maix-blockly .blocklyFlyoutBackground {
+  fill: #eef4ff;
+  fill-opacity: 0.98;
+}
+
+.maix-blockly .blocklyScrollbarHandle {
+  fill: #a9bbd6;
+}
+
+.maix-blockly .blocklyScrollbarHorizontal,
+.maix-blockly .blocklyScrollbarVertical {
+  display: none;
+}
+
+.maix-blockly .blocklyZoom > image,
+.maix-blockly .blocklyTrash > image {
+  opacity: 0.64;
+}
+
+.blocklyWidgetDiv,
+.blocklyDropDownDiv {
+  z-index: 80 !important;
+}
+
+.blocklyDialog {
+  position: fixed !important;
+  inset: 0 !important;
+  width: min(420px, calc(100vw - 32px)) !important;
+  height: fit-content !important;
+  margin: auto !important;
+  padding: 0 !important;
+  overflow: hidden;
+  border: 1px solid var(--color-line) !important;
+  border-radius: 12px !important;
+  background: var(--color-surface) !important;
+  color: var(--color-ink) !important;
+  box-shadow: 0 24px 64px rgba(15, 35, 70, 0.24) !important;
+}
+
+.blocklyDialog::backdrop {
+  background: rgba(17, 31, 55, 0.32);
+  backdrop-filter: blur(2px);
+}
+
+.blocklyDialogForm {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  padding: 22px;
+}
+
+.blocklyDialogPrompt {
+  color: var(--color-ink);
+  font-family: var(--font-sans);
+  font-size: 15px;
+  font-weight: 600;
+  line-height: 1.5;
+}
+
+.blocklyDialogInput {
+  width: 100%;
+  border: 1px solid var(--color-line-strong);
+  border-radius: var(--radius-control);
+  padding: 8px 10px;
+  color: var(--color-ink);
+  font: inherit;
+}
+
+.blocklyDialogButtonRow {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.blocklyDialogConfirmButton,
+.blocklyDialogCancelButton {
+  min-height: 36px;
+  border-radius: var(--radius-control);
+  padding: 0 14px;
+  font-family: var(--font-sans);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.blocklyDialogConfirmButton {
+  border: 1px solid var(--color-accent);
+  background: var(--color-accent);
+  color: white;
+}
+
+.blocklyDialogCancelButton {
+  border: 1px solid var(--color-line-strong);
+  background: var(--color-surface);
+  color: var(--color-ink-soft);
+}
+
+section[id] {
+  scroll-margin-top: 5rem;
+}
+
+:where(button, a, input, textarea, select):focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+}
+
+button,
+a {
+  touch-action: manipulation;
+}
+
+@media (max-width: 640px) {
+  input[type='text'],
+  input[type='password'] {
+    font-size: 16px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
 }

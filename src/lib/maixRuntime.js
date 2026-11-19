@@ -1,4 +1,5 @@
 export const DEPLOY_RESULT_MARKER = '__COCOPI_DEPLOY_RESULT__';
+export const UPLOAD_RESULT_MARKER = '__COCOPI_UPLOAD_RESULT__';
 export const STOP_RESULT_MARKER = '__COCOPI_STOP_RESULT__';
 export const SHELL_RESULT_MARKER = '__COCOPI_SHELL_RESULT__';
 export const SHELL_CWD_MARKER = '__COCOPI_CWD__';
@@ -19,6 +20,78 @@ function bytesToBase64(bytes) {
 export function buildPythonCommand(source) {
   const encoded = bytesToBase64(new TextEncoder().encode(source));
   return `python3 -c "import base64;exec(base64.b64decode('${encoded}'))"`;
+}
+
+export function buildPortablePythonCommand(source) {
+  const encoded = bytesToBase64(new TextEncoder().encode(source));
+  return (
+    `PY=$(command -v python3 || command -v python); ` +
+    `[ -n "$PY" ] || { echo '设备上未找到 python3 或 python' >&2; exit 127; }; ` +
+    `"$PY" -c "import base64;exec(base64.b64decode('${encoded}'))"`
+  );
+}
+
+export function buildUploadProgramScript(pythonCode, filename = 'user_latest_code.py') {
+  const targetPath = `/root/${sanitizeFilename(filename)}`;
+  return String.raw`
+import json
+import os
+import shutil
+import subprocess
+
+RESULT_MARKER = ${JSON.stringify(UPLOAD_RESULT_MARKER)}
+SOURCE_CODE = ${JSON.stringify(String(pythonCode || ''))}
+TARGET_PATH = ${JSON.stringify(targetPath)}
+
+
+def emit(payload):
+    print(RESULT_MARKER + json.dumps(payload, ensure_ascii=False))
+
+
+try:
+    with open(TARGET_PATH, 'w', encoding='utf-8') as target:
+        target.write(SOURCE_CODE)
+    python_cmd = shutil.which('python3') or shutil.which('python')
+    if not python_cmd:
+        raise RuntimeError('设备上未找到 python3 或 python')
+    compile_result = subprocess.run(
+        [python_cmd, '-m', 'py_compile', TARGET_PATH],
+        capture_output=True,
+        text=True,
+        check=False
+    )
+    if compile_result.returncode != 0:
+        raise RuntimeError(
+            (compile_result.stdout + compile_result.stderr)[-3000:]
+            or 'Python 语法检查失败'
+        )
+    emit({
+        'ok': True,
+        'target': TARGET_PATH,
+        'python': python_cmd
+    })
+except Exception as error:
+    emit({
+        'ok': False,
+        'target': TARGET_PATH,
+        'error': str(error)
+    })
+`;
+}
+
+export function parseUploadProgramResult(output) {
+  const text = String(output || '');
+  const markerIndex = text.lastIndexOf(UPLOAD_RESULT_MARKER);
+  if (markerIndex < 0) return null;
+  const line = text
+    .slice(markerIndex + UPLOAD_RESULT_MARKER.length)
+    .trim()
+    .split(/\r?\n/, 1)[0];
+  try {
+    return JSON.parse(line);
+  } catch (_) {
+    return null;
+  }
 }
 
 export async function buildCompressedWsScript(source) {
@@ -181,6 +254,18 @@ def python_executable():
 
 
 def stop_launcher_daemon():
+    subprocess.run(
+        ['systemctl', 'stop', 'launcher.service'],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        check=False
+    )
+    subprocess.run(
+        ['systemctl', 'stop', 'llm-tokenizer.service', 'sensevoice.service'],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        check=False
+    )
     for pattern in (
         '/maixapp/apps/launcher/launcher[_]daemon',
         '/maixapp/apps/launcher/[l]auncher daemon'
@@ -276,13 +361,13 @@ def stop_user_programs():
         signal_process(pid, signal.SIGTERM)
 
     if processes:
-        time.sleep(0.4)
+        time.sleep(1.5)
 
     for pid, _ in user_processes():
         signal_process(pid, signal.SIGKILL)
 
     if processes:
-        time.sleep(0.2)
+        time.sleep(1.0)
     return user_processes()
 
 
@@ -308,23 +393,60 @@ def stop_maixapp_apps():
     return maixapp_processes()
 
 
-def refresh_display(python_cmd):
-    refresh_source = """
-from maix import display, image
+def display_holder_processes():
+    current_pid = os.getpid()
+    holders = []
+    for proc_name in os.listdir('/proc'):
+        if not proc_name.isdigit():
+            continue
+        pid = int(proc_name)
+        if pid == current_pid or pid <= 1:
+            continue
+        fd_dir = '/proc/' + proc_name + '/fd'
+        try:
+            command = open('/proc/' + proc_name + '/cmdline', 'rb').read().replace(
+                b'\x00',
+                b' '
+            ).decode('utf-8', errors='replace').strip()[:240]
+            if 'ws_agent.py' in command:
+                continue
+            holds_display = False
+            for fd_name in os.listdir(fd_dir):
+                try:
+                    target = os.readlink(fd_dir + '/' + fd_name)
+                    if (
+                        target.startswith('/dev/fb')
+                        or target.startswith('/dev/vo')
+                        or target.startswith('/dev/vb')
+                        or target.startswith('/dev/video')
+                    ):
+                        holds_display = True
+                        break
+                except OSError:
+                    continue
+            if holds_display:
+                holders.append((pid, command or 'unknown'))
+        except OSError:
+            continue
+    return holders
 
-disp = display.Display()
-img = image.Image(disp.width(), disp.height(), bg=image.COLOR_BLACK)
-disp.show(img)
-print('display_refreshed=ok')
-"""
-    return subprocess.run(
-        [python_cmd, '-c', refresh_source],
-        capture_output=True,
-        text=True,
-        timeout=12,
-        cwd='/tmp',
-        check=False
-    )
+
+def release_display_resources():
+    holders = display_holder_processes()
+    for pid, _ in holders:
+        signal_process(pid, signal.SIGTERM)
+    if holders:
+        time.sleep(1.0)
+
+    for pid, _ in display_holder_processes():
+        signal_process(pid, signal.SIGKILL)
+
+    for _ in range(10):
+        remaining = display_holder_processes()
+        if not remaining:
+            return []
+        time.sleep(0.5)
+    return display_holder_processes()
 
 
 def read_log_tail(log_path, limit=2000):
@@ -333,6 +455,33 @@ def read_log_tail(log_path, limit=2000):
             return log_file.read()[-limit:]
     except Exception:
         return ''
+
+
+def restore_launcher_service():
+    try:
+        result = subprocess.run(
+            ['systemctl', 'start', 'launcher.service'],
+            capture_output=True,
+            text=True,
+            timeout=12,
+            check=False
+        )
+        time.sleep(2.0)
+        output = (result.stdout + result.stderr)[-2000:]
+        return {
+            'started': result.returncode == 0,
+            'command': 'systemctl start launcher.service',
+            'output': output,
+            'error': '' if result.returncode == 0 else (
+                'systemctl 返回 ' + str(result.returncode)
+            )
+        }
+    except Exception as error:
+        return {
+            'started': False,
+            'command': 'systemctl start launcher.service',
+            'error': str(error)
+        }
 
 
 def run():
@@ -363,22 +512,19 @@ def run():
             'processes': [process for _, process in remaining]
         }
 
-    try:
-        refreshed = refresh_display(python_cmd)
-    except Exception as error:
+    remaining_display = release_display_resources()
+    if remaining_display:
         return {
             'ok': False,
-            'stage': 'display',
-            'error': '显示刷新异常: ' + str(error)
+            'stage': 'display_release',
+            'error': '旧程序仍占用显示或摄像头资源',
+            'processes': [process for _, process in remaining_display]
         }
 
-    if refreshed.returncode != 0:
-        return {
-            'ok': False,
-            'stage': 'display',
-            'error': 'display.Display() 刷新失败',
-            'output': (refreshed.stdout + refreshed.stderr)[-4000:]
-        }
+    if PREVIOUS_PID is not None:
+        time.sleep(2.0)
+    else:
+        time.sleep(0.5)
 
     if USE_EXISTING_FILE:
         if not os.path.isfile(TARGET_PATH):
@@ -405,11 +551,13 @@ def run():
         env['PYTHONUNBUFFERED'] = '1'
         process = subprocess.Popen(
             [python_cmd, '-u', TARGET_PATH],
+            stdin=subprocess.DEVNULL,
             stdout=log_file,
             stderr=subprocess.STDOUT,
             cwd='/root',
             env=env,
-            start_new_session=True
+            start_new_session=True,
+            close_fds=True
         )
 
     time.sleep(1.5)
@@ -449,7 +597,10 @@ def run():
 
 
 try:
-    emit(run())
+    result = run()
+    if not result.get('running'):
+        result['launcher'] = restore_launcher_service()
+    emit(result)
 except Exception as error:
     emit({
         'ok': False,
@@ -474,6 +625,208 @@ export function parseDeploymentResult(output) {
   } catch (_) {
     return null;
   }
+}
+
+export function buildSafeStopProgramScript(previousPid = null) {
+  return String.raw`
+import json
+import os
+import signal
+import subprocess
+import time
+
+RESULT_MARKER = ${JSON.stringify(STOP_RESULT_MARKER)}
+PREVIOUS_PID = ${Number(previousPid) > 0 ? Number(previousPid) : 'None'}
+
+
+def emit(payload):
+    print(RESULT_MARKER + json.dumps(payload, ensure_ascii=False))
+
+
+def process_command(pid):
+    try:
+        data = open(
+            '/proc/' + str(pid) + '/cmdline',
+            'rb'
+        ).read().replace(b'\x00', b' ')
+        return data.decode('utf-8', errors='replace').strip()[:1000]
+    except OSError:
+        return ''
+
+
+def user_processes():
+    current_pid = os.getpid()
+    processes = []
+    markers = (
+        '/root/user_latest_code.py',
+        '/root/event.py',
+        '/root/cocopi_run.py',
+        '/root/ai_generated',
+        '/tmp/cocopi_run_'
+    )
+
+    for proc_name in os.listdir('/proc'):
+        if not proc_name.isdigit():
+            continue
+        pid = int(proc_name)
+        if pid == current_pid:
+            continue
+        command = process_command(pid)
+        if not command or 'ws_agent.py' in command:
+            continue
+        is_previous = (
+            PREVIOUS_PID is not None
+            and pid == PREVIOUS_PID
+            and 'python' in command.lower()
+        )
+        if is_previous or any(marker in command for marker in markers):
+            processes.append((pid, command[:240]))
+    return processes
+
+
+def signal_process(pid, signal_number):
+    try:
+        os.killpg(pid, signal_number)
+        return
+    except OSError:
+        pass
+    try:
+        os.kill(pid, signal_number)
+    except OSError:
+        pass
+
+
+def wait_until_stopped(timeout_seconds):
+    deadline = time.time() + timeout_seconds
+    while time.time() < deadline:
+        if not user_processes():
+            return []
+        time.sleep(0.2)
+    return user_processes()
+
+
+def stop_user_programs():
+    original = user_processes()
+    stopped_pids = []
+
+    for pid, _ in original:
+        signal_process(pid, signal.SIGINT)
+    remaining = wait_until_stopped(2.5)
+    stopped_pids.extend(
+        pid for pid, _ in original
+        if all(pid != remaining_pid for remaining_pid, _ in remaining)
+    )
+
+    if remaining:
+        for pid, _ in remaining:
+            signal_process(pid, signal.SIGTERM)
+        remaining = wait_until_stopped(2.5)
+        stopped_pids.extend(
+            pid for pid, _ in original
+            if pid not in stopped_pids
+            and all(pid != remaining_pid for remaining_pid, _ in remaining)
+        )
+
+    if remaining:
+        for pid, _ in remaining:
+            signal_process(pid, signal.SIGKILL)
+        remaining = wait_until_stopped(2.0)
+        stopped_pids.extend(
+            pid for pid, _ in original
+            if pid not in stopped_pids
+            and all(pid != remaining_pid for remaining_pid, _ in remaining)
+        )
+
+    return [
+        f'{pid}: {command}'
+        for pid, command in original
+        if pid in stopped_pids
+    ], remaining
+
+
+def start_launcher():
+    if user_processes():
+        return {
+            'started': False,
+            'command': 'systemctl start launcher.service',
+            'error': '用户程序仍在运行，未启动 launcher'
+        }
+
+    subprocess.run(
+        ['systemctl', 'stop', 'llm-tokenizer.service', 'sensevoice.service'],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        check=False
+    )
+    subprocess.run(
+        ['systemctl', 'reset-failed', 'launcher.service'],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        check=False
+    )
+    result = subprocess.run(
+        ['systemctl', 'start', 'launcher.service'],
+        capture_output=True,
+        text=True,
+        timeout=15,
+        check=False
+    )
+    time.sleep(2.5)
+    active = subprocess.run(
+        ['systemctl', 'is-active', '--quiet', 'launcher.service'],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        check=False
+    )
+    output = (result.stdout + result.stderr)[-2000:]
+    started = result.returncode == 0 and active.returncode == 0
+    return {
+        'started': started,
+        'command': 'systemctl start launcher.service',
+        'output': output,
+        'error': '' if started else (
+            'launcher.service 未正常启动'
+            + ('，返回码 ' + str(result.returncode) if result.returncode else '')
+            + ('，当前状态异常' if active.returncode else '')
+        )
+    }
+
+
+try:
+    stopped, remaining = stop_user_programs()
+    if remaining:
+        emit({
+            'ok': False,
+            'program_stopped': False,
+            'stopped': stopped,
+            'remaining': [
+                f'{pid}: {command}' for pid, command in remaining
+            ],
+            'launcher': {
+                'started': False,
+                'error': '用户程序未完全退出，已取消启动 launcher'
+            }
+        })
+    else:
+        launcher = start_launcher()
+        emit({
+            'ok': launcher.get('started', False),
+            'program_stopped': True,
+            'stopped': [
+                item.split(':', 1)[0] for item in stopped
+            ],
+            'remaining': [],
+            'launcher': launcher
+        })
+except Exception as error:
+    emit({
+        'ok': False,
+        'program_stopped': False,
+        'stopped': [],
+        'remaining': [],
+        'error': str(error)
+    })
+`;
 }
 
 export function buildStopProgramScript(previousPid = null) {
@@ -603,6 +956,57 @@ def stop_maixapp_apps():
     return stopped, maixapp_processes()
 
 
+def display_holder_processes():
+    current_pid = os.getpid()
+    processes = []
+    for proc_name in os.listdir('/proc'):
+        if not proc_name.isdigit():
+            continue
+        pid = int(proc_name)
+        if pid == current_pid or pid <= 1:
+            continue
+        fd_dir = '/proc/' + proc_name + '/fd'
+        try:
+            command = open('/proc/' + proc_name + '/cmdline', 'rb').read().replace(
+                b'\x00',
+                b' '
+            ).decode('utf-8', errors='replace').strip()[:240]
+            if 'ws_agent.py' in command:
+                continue
+            holds_display = False
+            for fd_name in os.listdir(fd_dir):
+                try:
+                    target = os.readlink(fd_dir + '/' + fd_name)
+                    if (
+                        target.startswith('/dev/fb')
+                        or target.startswith('/dev/vo')
+                        or target.startswith('/dev/video')
+                    ):
+                        holds_display = True
+                        break
+                except OSError:
+                    continue
+            if holds_display:
+                processes.append((pid, command or 'unknown'))
+        except OSError:
+            continue
+    return processes
+
+
+def force_release_display_resources():
+    stopped = display_holder_processes()
+    for pid, _ in stopped:
+        signal_process(pid, signal.SIGTERM)
+    if stopped:
+        time.sleep(1.0)
+    remaining = display_holder_processes()
+    for pid, _ in remaining:
+        signal_process(pid, signal.SIGKILL)
+    if remaining:
+        time.sleep(0.5)
+    return stopped, display_holder_processes()
+
+
 def launcher_processes():
     output = subprocess.run(
         ['ps', 'w'],
@@ -637,11 +1041,21 @@ def launcher_ui_processes():
 
 
 def stop_launcher_processes():
+    subprocess.run(
+        ['systemctl', 'stop', 'launcher.service'],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        check=False
+    )
     processes = launcher_processes()
     for pid, _ in processes:
+        signal_process(pid, signal.SIGTERM)
+    if processes:
+        time.sleep(1.0)
+    for pid, _ in launcher_processes():
         signal_process(pid, signal.SIGKILL)
     if processes:
-        time.sleep(1.5)
+        time.sleep(0.5)
     return processes
 
 
@@ -662,132 +1076,139 @@ def read_launcher_ui_log():
 
 
 def clear_display_before_launcher():
-    python_cmd = shutil.which('python3') or shutil.which('python')
-    if not python_cmd:
-        return {'ok': False, 'error': '设备上未找到 Python'}
-
-    source = """
-from maix import display, image
-
-disp = display.Display()
-img = image.Image(disp.width(), disp.height(), bg=image.COLOR_BLACK)
-disp.show(img)
-print('display_cleared=ok')
-"""
-    attempts = []
-    for attempt in range(3):
-        try:
-            result = subprocess.run(
-                [python_cmd, '-c', source],
-                capture_output=True,
-                text=True,
-                timeout=10,
-                cwd='/tmp',
-                check=False
-            )
-            attempts.append({
-                'attempt': attempt + 1,
-                'returncode': result.returncode,
-                'output': (result.stdout + result.stderr)[-2000:]
-            })
-            if result.returncode == 0:
-                return {
-                    'ok': True,
-                    'returncode': result.returncode,
-                    'output': (result.stdout + result.stderr)[-2000:],
-                    'attempts': attempts
-                }
-        except Exception as error:
-            attempts.append({
-                'attempt': attempt + 1,
-                'error': str(error)
-            })
-
-        if attempt < 2:
-            time.sleep(2.0)
-
-    last = attempts[-1] if attempts else {}
     return {
-        'ok': False,
-        'error': last.get('error') or 'display.Display() 连续三次初始化失败',
-        'output': last.get('output', ''),
-        'attempts': attempts
+        'ok': True,
+        'skipped': True,
+        'output': 'display initialization delegated to launcher.service'
     }
 
 
 def start_launcher():
-    previous = stop_launcher_processes()
     try:
-        open('/tmp/launcher-daemon.log', 'wb').close()
-        open('/tmp/launcher-ui.log', 'wb').close()
-    except Exception:
-        pass
-    candidates = []
-    if os.access(LAUNCHER, os.X_OK):
-        candidates.append([LAUNCHER, 'daemon'])
-    if os.access(LAUNCHER_DAEMON, os.X_OK):
-        candidates.append([LAUNCHER_DAEMON])
-    if not candidates:
-        return {'started': False, 'error': 'launcher daemon 不存在'}
-
-    attempts = []
-    for command in candidates:
         try:
-            if attempts:
-                stop_launcher_processes()
-            shell_command = (
-                'nohup '
-                + ' '.join(command)
-                + ' >> /tmp/launcher-daemon.log 2>&1 &'
-            )
-            subprocess.run(
-                ['/bin/sh', '-c', shell_command],
-                cwd='/maixapp/apps/launcher',
+            open('/tmp/launcher-daemon.log', 'wb').close()
+            open('/tmp/launcher-ui.log', 'wb').close()
+        except Exception:
+            pass
+        subprocess.run(
+            ['systemctl', 'reset-failed', 'launcher.service'],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=False
+        )
+        result = subprocess.run(
+            ['systemctl', 'restart', 'launcher.service'],
+            capture_output=True,
+            text=True,
+            timeout=15,
+            check=False
+        )
+        ui_pid = None
+        ui_start_error = ''
+        time.sleep(1.0)
+        if not launcher_ui_processes():
+            try:
+                with open('/tmp/launcher-ui.log', 'ab') as ui_log:
+                    ui_process = subprocess.Popen(
+                        [LAUNCHER],
+                        stdin=subprocess.DEVNULL,
+                        stdout=ui_log,
+                        stderr=subprocess.STDOUT,
+                        cwd='/maixapp/apps/launcher',
+                        start_new_session=True,
+                        close_fds=True
+                    )
+                    ui_pid = ui_process.pid
+            except Exception as error:
+                ui_start_error = str(error)
+        active_code = 1
+        processes = []
+        time.sleep(3.0)
+        active = subprocess.run(
+            ['systemctl', 'is-active', '--quiet', 'launcher.service'],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=False
+        )
+        active_code = active.returncode
+        processes = launcher_processes()
+        display_holders = display_holder_processes()
+        launcher_holding_display = any(
+            'launcher' in command
+            for _, command in display_holders
+        )
+        try:
+            journal = subprocess.run(
+                [
+                    'journalctl',
+                    '-u',
+                    'launcher.service',
+                    '-n',
+                    '40',
+                    '--no-pager',
+                    '--output=cat'
+                ],
+                capture_output=True,
+                text=True,
+                timeout=5,
                 check=False
-            )
-            time.sleep(3.0)
-            processes = launcher_processes()
-            attempts.append({
-                'command': ' '.join(command),
-                'processes': [item for _, item in processes]
-            })
-            if processes:
-                ui_command = (
-                    'nohup '
-                    + LAUNCHER
-                    + ' >> /tmp/launcher-ui.log 2>&1 &'
-                )
-                subprocess.run(
-                    ['/bin/sh', '-c', ui_command],
-                    cwd='/maixapp/apps/launcher',
-                    check=False
-                )
-                time.sleep(2.0)
-                ui_processes = launcher_ui_processes()
-                if ui_processes:
-                    return {
-                        'started': True,
-                        'previous_pids': [pid for pid, _ in previous],
-                        'command': ' '.join(command) + ' + ' + LAUNCHER,
-                        'processes': [item for _, item in processes + ui_processes]
-                    }
-                attempts.append({
-                    'command': LAUNCHER,
-                    'error': 'launcher daemon 已运行，但 launcher UI 未保持运行',
-                    'log': read_launcher_ui_log()
-                })
-        except Exception as error:
-            attempts.append({
-                'command': ' '.join(command),
-                'error': str(error)
-            })
-
-    return {
-        'started': False,
-        'error': 'launcher daemon 启动后未保持运行',
-        'attempts': attempts,
-        'log': read_launcher_log()
-    }
+            ).stdout[-4000:]
+        except Exception:
+            journal = ''
+        launcher_log = (
+            read_launcher_log()
+            + '\n'
+            + read_launcher_ui_log()
+            + '\n'
+            + journal
+        )
+        fatal_tokens = (
+            'traceback',
+            'vo init failed',
+            'unknown error',
+            'failed with',
+            'sample_comm_vo_startvo failed'
+        )
+        log_has_error = any(
+            token in launcher_log.lower()
+            for token in fatal_tokens
+        )
+        return {
+            'started': (
+                result.returncode == 0
+                and active_code == 0
+                and (bool(processes) or launcher_holding_display)
+                and not log_has_error
+                and not ui_start_error
+            ),
+            'command': 'systemctl restart launcher.service + launcher UI',
+            'processes': [process for _, process in processes],
+            'ui_pid': ui_pid,
+            'launcher_holding_display': launcher_holding_display,
+            'output': (result.stdout + result.stderr)[-2000:],
+            'stable_seconds': 3,
+            'error': '' if (
+                result.returncode == 0
+                and active_code == 0
+                and (bool(processes) or launcher_holding_display)
+                and not log_has_error
+                and not ui_start_error
+            ) else (
+                'systemctl 返回 ' + str(result.returncode)
+                + ', is-active=' + str(active_code)
+                + ', launcher_processes=' + str(len(processes))
+                + ', launcher_display=' + str(launcher_holding_display)
+                + (', launcher 日志包含错误' if log_has_error else '')
+                + (', UI 启动失败: ' + ui_start_error if ui_start_error else '')
+            ),
+            'log': launcher_log[-6000:]
+        }
+    except Exception as error:
+        return {
+            'started': False,
+            'command': 'systemctl restart launcher.service',
+            'error': str(error)
+        }
 
 
 try:
@@ -803,12 +1224,19 @@ try:
                 'processes': [process for _, process in remaining_apps]
             }
         else:
-            time.sleep(3.0)
+            time.sleep(1.0)
             previous_launcher = stop_launcher_processes()
-            time.sleep(2.0)
+            time.sleep(0.5)
+            display_stopped, display_remaining = force_release_display_resources()
             screen_clear = clear_display_before_launcher()
             launcher = start_launcher()
             launcher['screen_clear'] = screen_clear
+            launcher['display_stopped'] = [
+                process for _, process in display_stopped
+            ]
+            launcher['display_remaining'] = [
+                process for _, process in display_remaining
+            ]
             launcher['previous_launcher_pids'] = [
                 pid for pid, _ in previous_launcher
             ]
@@ -832,22 +1260,6 @@ except Exception as error:
         'remaining': []
     })
 `;
-}
-
-export function parseStopResult(output) {
-  const text = String(output || '');
-  const markerIndex = text.lastIndexOf(STOP_RESULT_MARKER);
-  if (markerIndex < 0) return null;
-
-  const line = text
-    .slice(markerIndex + STOP_RESULT_MARKER.length)
-    .trim()
-    .split(/\r?\n/, 1)[0];
-  try {
-    return JSON.parse(line);
-  } catch (_) {
-    return null;
-  }
 }
 
 export function buildWifiProgramScript(pythonCode, filename = 'user_latest_code.py') {
@@ -929,6 +1341,344 @@ except Exception as error:
 `;
 }
 
+export const WIFI_UPLOAD_INIT_MARKER = '__COCOPI_UPLOAD_INIT_OK__';
+export const WIFI_COMPILE_MARKER = '__COCOPI_WIFI_COMPILE_RESULT__';
+export const WIFI_PREPARE_MARKER = '__COCOPI_WIFI_PREPARE_OK__';
+
+export function wifiUploadChunkMarker(index) {
+  return `__COCOPI_UPLOAD_CHUNK_OK__:${Number(index)}`;
+}
+
+function wifiTargetPath(filename) {
+  return `/root/${sanitizeFilename(filename)}`;
+}
+
+export function splitWifiUploadChunks(source, chunkSize = 512) {
+  const encoded = bytesToBase64(new TextEncoder().encode(String(source || '')));
+  const numericChunkSize = Number(chunkSize);
+  const normalizedChunkSize =
+    Number.isFinite(numericChunkSize) && numericChunkSize >= 4 ? numericChunkSize : 512;
+  const safeChunkSize = Math.max(
+    4,
+    Math.floor(normalizedChunkSize) - (Math.floor(normalizedChunkSize) % 4)
+  );
+  const chunks = [];
+  for (let index = 0; index < encoded.length; index += safeChunkSize) {
+    chunks.push(encoded.slice(index, index + safeChunkSize));
+  }
+  return chunks.length ? chunks : [''];
+}
+
+export function buildWifiUploadInitScript(filename = 'user_latest_code.py') {
+  const targetPath = wifiTargetPath(filename);
+  return String.raw`
+import json
+
+TARGET_PATH = ${JSON.stringify(targetPath)}
+
+try:
+    with open(TARGET_PATH, 'wb'):
+        pass
+    print(${JSON.stringify(WIFI_UPLOAD_INIT_MARKER)})
+except Exception as error:
+    print('__COCOPI_UPLOAD_ERROR__:' + json.dumps(str(error), ensure_ascii=False))
+`;
+}
+
+export function buildWifiUploadChunkScript(
+  base64Chunk,
+  index,
+  filename = 'user_latest_code.py'
+) {
+  const targetPath = wifiTargetPath(filename);
+  return String.raw`
+import base64
+
+TARGET_PATH = ${JSON.stringify(targetPath)}
+CHUNK = ${JSON.stringify(String(base64Chunk || ''))}
+
+data = base64.b64decode(CHUNK)
+with open(TARGET_PATH, 'ab') as target:
+    target.write(data)
+print(${JSON.stringify(wifiUploadChunkMarker(index))})
+`;
+}
+
+export function buildWifiUploadStartScript(filename = 'user_latest_code.py') {
+  const targetPath = wifiTargetPath(filename);
+  return String.raw`
+import json
+import os
+import shutil
+import subprocess
+import time
+
+RESULT_MARKER = ${JSON.stringify(DEPLOY_RESULT_MARKER)}
+TARGET_PATH = ${JSON.stringify(targetPath)}
+
+
+def emit(payload):
+    print(RESULT_MARKER + json.dumps(payload, ensure_ascii=False))
+
+
+def unique(values):
+    result = []
+    for value in values:
+        if value and value not in result:
+            result.append(value)
+    return result
+
+
+def find_library_dirs():
+    found = []
+    roots = (
+        '/usr/local/lib/python3.13/site-packages/maix',
+        '/maixapp/lib',
+        '/maixapp/share/lib',
+        '/opt/lib'
+    )
+    for root in roots:
+        if not os.path.isdir(root):
+            continue
+        for current, _, files in os.walk(root):
+            if any(name.startswith('libonnxruntime.so') for name in files):
+                if current not in found:
+                    found.append(current)
+            if len(found) >= 4:
+                return found
+    return found
+
+
+def build_runtime_env():
+    env = os.environ.copy()
+    library_path = env.get('LD_LIBRARY_PATH', '')
+    env['LD_LIBRARY_PATH'] = ':'.join(unique([
+        library_path,
+        *find_library_dirs(),
+        '/usr/local/lib',
+        '/usr/local/lib/python3.13/site-packages',
+        '/usr/local/lib/python3.13/site-packages/maix',
+        '/usr/local/lib/python3.13/site-packages/maix/_maix',
+        '/usr/lib',
+        '/usr/lib64',
+        '/usr/lib/aarch64-linux-gnu',
+        '/lib/aarch64-linux-gnu',
+        '/lib',
+        '/lib64',
+        '/usr/local/lib64',
+        '/maixapp/lib',
+        '/maixapp/share/lib',
+        '/opt/lib'
+    ]))
+    return env
+
+
+def python_candidates():
+    commands = []
+    for path in (
+        '/usr/bin/python3',
+        '/usr/bin/python',
+        '/usr/local/bin/python3',
+        '/usr/local/bin/python'
+    ):
+        if os.path.exists(path):
+            commands.append([path])
+            if os.path.exists('/usr/bin/sudo'):
+                commands.append(['/usr/bin/sudo', '-n', path])
+    for name in ('python3', 'python'):
+        path = shutil.which(name)
+        if path:
+            commands.append([path])
+
+    result = []
+    for command in commands:
+        if command not in result:
+            result.append(command)
+    return result
+
+
+def select_python(env):
+    attempts = []
+    for command in python_candidates():
+        try:
+            check = subprocess.run(
+                command + ['-c', 'from maix import display'],
+                capture_output=True,
+                text=True,
+                timeout=4,
+                env=env,
+                check=False
+            )
+            attempts.append({
+                'command': ' '.join(command),
+                'returncode': check.returncode,
+                'output': (check.stdout + check.stderr)[-1000:]
+            })
+            if check.returncode == 0:
+                return command, attempts
+        except Exception as error:
+            attempts.append({
+                'command': ' '.join(command),
+                'error': str(error)
+            })
+    raise RuntimeError(
+        '没有找到可导入 maix 的 Python: '
+        + json.dumps(attempts, ensure_ascii=False)
+    )
+
+
+try:
+    runtime_env = build_runtime_env()
+    python_cmd, python_attempts = select_python(runtime_env)
+
+    compile_result = subprocess.run(
+        python_cmd + ['-m', 'py_compile', TARGET_PATH],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        env=runtime_env,
+        check=False
+    )
+    if compile_result.returncode != 0:
+        raise RuntimeError(
+            'Python 语法检查未通过:\n' + (compile_result.stdout or '')[-2000:]
+        )
+
+    os.system("pkill -f '/root/[e]vent.py' 2>/dev/null || true")
+    os.system("pkill -f '/root/[c]ocopi_run.py' 2>/dev/null || true")
+    os.system("pkill -f '/root/[u]ser_latest_code.py' 2>/dev/null || true")
+    os.system('systemctl stop llm-tokenizer.service sensevoice.service')
+    os.system('systemctl stop launcher.service')
+
+    log_path = '/tmp/cocopi_run.log'
+    with open(log_path, 'wb') as log_file:
+        process = subprocess.Popen(
+            python_cmd + ['-u', TARGET_PATH],
+            stdin=subprocess.DEVNULL,
+            stdout=log_file,
+            stderr=subprocess.STDOUT,
+            cwd='/root',
+            env=runtime_env,
+            start_new_session=True,
+            close_fds=True
+        )
+
+    time.sleep(1.5)
+    exit_code = process.poll()
+    running = exit_code is None
+    try:
+        output = open(log_path, 'r', encoding='utf-8', errors='replace').read()[-2000:]
+    except Exception:
+        output = ''
+
+    emit({
+        'ok': running,
+        'running': running,
+        'pid': process.pid if running else None,
+        'python': ' '.join(python_cmd),
+        'python_attempts': python_attempts,
+        'target': TARGET_PATH,
+        'output': output,
+        'error': '' if running else '程序启动后立即退出'
+    })
+except Exception as error:
+    emit({
+        'ok': False,
+        'stage': 'run',
+        'error': str(error)
+    })
+`;
+}
+
+export function buildWifiCompileUploadedScript(filename = 'user_latest_code.py') {
+  const targetPath = wifiTargetPath(filename);
+  return String.raw`
+import json
+import os
+import subprocess
+
+TARGET_PATH = ${JSON.stringify(targetPath)}
+PYTHON = next((path for path in (
+    '/usr/bin/python3',
+    '/usr/bin/python',
+    '/usr/local/bin/python3',
+    '/usr/local/bin/python'
+) if os.path.exists(path)), 'python3')
+
+result = subprocess.run(
+    [PYTHON, '-m', 'py_compile', TARGET_PATH],
+    capture_output=True,
+    text=True,
+    check=False
+)
+if result.returncode != 0:
+    print(${JSON.stringify(WIFI_COMPILE_MARKER)} + json.dumps({
+        'ok': False,
+        'python': PYTHON,
+        'error': (result.stdout + result.stderr)[-2000:]
+    }, ensure_ascii=False))
+else:
+    print(${JSON.stringify(WIFI_COMPILE_MARKER)} + json.dumps({
+        'ok': True,
+        'python': PYTHON
+    }, ensure_ascii=False))
+`;
+}
+
+export function buildWifiLaunchUploadedScript(filename = 'user_latest_code.py') {
+  const targetPath = wifiTargetPath(filename);
+  return String.raw`
+import json
+import os
+import subprocess
+import time
+
+M = ${JSON.stringify(DEPLOY_RESULT_MARKER)}
+T = ${JSON.stringify(targetPath)}
+
+
+def emit(p):
+    print(M + json.dumps(p, ensure_ascii=False))
+
+
+try:
+    os.system("nohup sudo python -u " + T + " >/tmp/cocopi_run.log 2>&1 &")
+    time.sleep(2.0)
+    running = subprocess.run(
+        ['pgrep', '-f', T],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        check=False
+    ).returncode == 0
+    try:
+        output = open('/tmp/cocopi_run.log', encoding='utf-8', errors='replace').read()[-2000:]
+    except Exception:
+        output = ''
+    emit({
+        'ok': running,
+        'running': running,
+        'target': T,
+        'output': output,
+        'error': '' if running else '程序启动后立即退出'
+    })
+except Exception as error:
+    emit({'ok': False, 'stage': 'run', 'error': str(error)})
+`;
+}
+
+export function buildWifiPrepareLaunchScript() {
+  return String.raw`
+import os
+
+os.system("pkill -f '/root/[e]vent.py' 2>/dev/null || true")
+os.system("pkill -f '/root/[c]ocopi_run.py' 2>/dev/null || true")
+os.system("pkill -f '/root/[u]ser_latest_code.py' 2>/dev/null || true")
+os.system('systemctl stop llm-tokenizer.service sensevoice.service')
+os.system('systemctl stop launcher.service')
+print(${JSON.stringify(WIFI_PREPARE_MARKER)})
+`;
+}
+
 export function buildWifiStopScript() {
   return String.raw`
 import json
@@ -972,4 +1722,35 @@ except Exception as error:
         'remaining': []
     })
 `;
+}
+
+export function parseWifiCompileResult(output) {
+  const text = String(output || '');
+  const markerIndex = text.lastIndexOf(WIFI_COMPILE_MARKER);
+  if (markerIndex < 0) return null;
+  const line = text
+    .slice(markerIndex + WIFI_COMPILE_MARKER.length)
+    .trim()
+    .split(/\r?\n/, 1)[0];
+  try {
+    return JSON.parse(line);
+  } catch (_) {
+    return null;
+  }
+}
+
+export function parseStopResult(output) {
+  const text = String(output || '');
+  const markerIndex = text.lastIndexOf(STOP_RESULT_MARKER);
+  if (markerIndex < 0) return null;
+
+  const line = text
+    .slice(markerIndex + STOP_RESULT_MARKER.length)
+    .trim()
+    .split(/\r?\n/, 1)[0];
+  try {
+    return JSON.parse(line);
+  } catch (_) {
+    return null;
+  }
 }

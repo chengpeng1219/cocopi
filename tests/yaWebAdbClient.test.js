@@ -39,20 +39,47 @@ test('ya-webadb client runs shell output through a remote process', async () => 
   assert.equal(result.output, 'hello\nworld\n');
 });
 
-test('run command uses systemd and uploads user_latest_code.py', async () => {
+test('ya-webadb client stops reading immediately after the result marker', async () => {
   const client = new YaWebAdbClient();
-  const uploads = [];
-  const commands = [];
-
-  client.uploadTextFile = async (filename, text) => {
-    uploads.push({ filename, text });
-  };
-  client.execShellCommand = async (command) => {
-    commands.push(command);
-    if (command.includes('__COCOPI_COMPILE_OK__')) {
-      return '__COCOPI_COMPILE_OK__';
+  let controller;
+  let killed = false;
+  client.adb = {
+    subprocess: {
+      noneProtocol: {
+        spawn: async () => ({
+          output: new ReadableStream({
+            start(streamController) {
+              controller = streamController;
+              streamController.enqueue(
+                new TextEncoder().encode(`${DEPLOY_RESULT_MARKER}{"ok":true}\n`)
+              );
+            }
+          }),
+          exited: new Promise(() => {}),
+          kill: async () => {
+            killed = true;
+            controller.close();
+          }
+        })
+      }
     }
-    return '__COCOPI_RUNNING__\n[CocoPi] started';
+  };
+
+  const result = await client.runShellCommand('deploy', 30_000, {
+    stopMarker: DEPLOY_RESULT_MARKER
+  });
+
+  assert.equal(killed, true);
+  assert.match(result.output, /__COCOPI_DEPLOY_RESULT__/);
+});
+
+test('deploy command enters development mode and tracks the remote PID', async () => {
+  const client = new YaWebAdbClient();
+  const scripts = [];
+
+  client.executePythonScript = async (script) => {
+    scripts.push(script);
+    return `${DEPLOY_RESULT_MARKER}{"ok":true,"running":true,"pid":42,"target":"/root/user_latest_code.py"}`;
   };
   client.adb = {};
 
@@ -61,41 +88,33 @@ test('run command uses systemd and uploads user_latest_code.py', async () => {
   );
 
   assert.equal(result.ok, true);
+  assert.equal(result.pid, 42);
   assert.equal(result.target, '/root/user_latest_code.py');
-  assert.equal(uploads.length, 1);
-  assert.deepEqual(
-    uploads.map((item) => item.filename),
-    ['/root/user_latest_code.py']
-  );
-  const stopBeforeRunCommand = commands.find((item) =>
-    item.includes("pkill -f '/root/[c]ocopi_run.py'")
-  );
-  const runCommand = commands.find((item) =>
-    item.includes('nohup sudo python -u /root/user_latest_code.py')
-  );
-  assert.match(stopBeforeRunCommand, /systemctl stop launcher\.service/);
-  assert.match(runCommand, /nohup sudo python -u \/root\/user_latest_code\.py/);
-  assert.match(runCommand, /__COCOPI_RUNNING__/);
+  assert.equal(scripts.length, 1);
+  assert.match(scripts[0], /stop_launcher_daemon/);
+  assert.match(scripts[0], /stop_maixapp_apps/);
+  assert.match(scripts[0], /stdin=subprocess\.DEVNULL/);
+  assert.match(scripts[0], /start_new_session=True/);
+  assert.match(scripts[0], /__COCOPI_DEPLOY_RESULT__/);
 });
 
-test('stop command kills the remote process and starts launcher.service', async () => {
+test('stop command kills the remote process and restores the launcher', async () => {
   const client = new YaWebAdbClient();
-  const process = makeProcess();
-  let executed = '';
-  client.programProcess = process;
-  client.execShellCommand = async (command) => {
-    executed = command;
-    return '__COCOPI_LAUNCHER_OK__';
+  let script = '';
+  client.executePythonScript = async (source) => {
+    script = source;
+    return `${STOP_RESULT_MARKER}{"ok":true,"program_stopped":true,"stopped":[42],"remaining":[],"launcher":{"started":true}}`;
   };
-  client.adb = {
-    subprocess: { noneProtocol: { spawn: async () => process } }
-  };
+  client.adb = {};
 
-  const result = parseStopResult(await client.stopRunningPrograms());
+  const result = parseStopResult(await client.stopRunningPrograms(42));
 
   assert.equal(result.ok, true);
   assert.equal(result.program_stopped, true);
   assert.equal(result.launcher.started, true);
-  assert.match(executed, /systemctl start launcher\.service/);
-  assert.match(executed, /\/root\/\[u\]ser_latest_code\.py/);
+  assert.match(script, /PREVIOUS_PID = 42/);
+  assert.match(script, /signal\.SIGINT/);
+  assert.match(script, /wait_until_stopped/);
+  assert.match(script, /systemctl', 'start', 'launcher\.service/);
+  assert.doesNotMatch(script, /display_holder_processes/);
 });

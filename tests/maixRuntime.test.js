@@ -3,14 +3,18 @@ import assert from 'node:assert/strict';
 import { gunzipSync } from 'node:zlib';
 import {
   DEPLOY_RESULT_MARKER,
+  UPLOAD_RESULT_MARKER,
   STOP_RESULT_MARKER,
   SHELL_RESULT_MARKER,
   SHELL_CWD_MARKER,
   SHELL_EXIT_MARKER,
   buildDeploymentScript,
-  buildStopProgramScript,
+  buildUploadProgramScript,
+  buildSafeStopProgramScript,
   buildPythonCommand,
+  buildPortablePythonCommand,
   parseDeploymentResult,
+  parseUploadProgramResult,
   parseStopResult,
   buildNativeShellCommand,
   parseNativeShellOutput,
@@ -19,7 +23,18 @@ import {
   shellQuote,
   buildCompressedWsScript,
   buildWifiProgramScript,
-  buildWifiStopScript
+  buildWifiStopScript,
+  splitWifiUploadChunks,
+  buildWifiUploadInitScript,
+  buildWifiUploadChunkScript,
+  buildWifiCompileUploadedScript,
+  buildWifiLaunchUploadedScript,
+  buildWifiPrepareLaunchScript,
+  WIFI_UPLOAD_INIT_MARKER,
+  WIFI_COMPILE_MARKER,
+  WIFI_PREPARE_MARKER,
+  parseWifiCompileResult,
+  wifiUploadChunkMarker
 } from '../src/lib/maixRuntime.js';
 
 test('buildDeploymentScript enters development mode before starting code', () => {
@@ -31,11 +46,17 @@ test('buildDeploymentScript enters development mode before starting code', () =>
   assert.match(script, /stop_launcher_daemon/);
   assert.match(script, /stop_user_programs/);
   assert.match(script, /stop_maixapp_apps/);
-  assert.match(script, /from maix import display, image/);
-  assert.match(script, /display\.Display\(\)/);
+  assert.match(script, /display_holder_processes/);
+  assert.match(script, /release_display_resources/);
+  assert.match(script, /stage': 'display_release/);
+  assert.match(script, /if PREVIOUS_PID is not None/);
+  assert.match(script, /systemctl', 'stop', 'launcher\.service/);
+  assert.match(script, /stdin=subprocess\.DEVNULL/);
   assert.match(script, /start_new_session=True/);
+  assert.match(script, /restore_launcher_service/);
   assert.match(script, /\/root\/user_latest_code\.py/);
   assert.match(script, /__COCOPI_DEPLOY_RESULT__/);
+  assert.doesNotMatch(script, /display_refreshed=ok/);
 });
 
 test('buildDeploymentScript stops a previously tracked PID before launch', () => {
@@ -63,6 +84,12 @@ test('buildPythonCommand base64-encodes Python source', () => {
   assert.match(command, /^python3 -c "import base64;exec\(base64\.b64decode\('/);
 });
 
+test('buildPortablePythonCommand selects python3 or python', () => {
+  const command = buildPortablePythonCommand('print("hello")');
+  assert.match(command, /command -v python3 \|\| command -v python/);
+  assert.match(command, /import base64;exec\(base64\.b64decode\('/);
+});
+
 test('parseDeploymentResult reads the final structured status line', () => {
   const output = [
     'device boot log',
@@ -82,13 +109,39 @@ test('parseDeploymentResult ignores malformed status data', () => {
   assert.equal(parseDeploymentResult(`${DEPLOY_RESULT_MARKER}{bad json}`), null);
 });
 
-test('stop script kills the user process group and restores launcher', () => {
-  const script = buildStopProgramScript(987);
+test('upload script writes and compiles the program without running it', () => {
+  const script = buildUploadProgramScript('print("uploaded")', 'user_latest_code.py');
+  assert.match(script, /SOURCE_CODE = "print\(\\"uploaded\\"\)"/);
+  assert.match(script, /\/root\/user_latest_code\.py/);
+  assert.match(script, /py_compile/);
+  assert.match(script, new RegExp(UPLOAD_RESULT_MARKER));
+  assert.doesNotMatch(script, /Popen\(/);
+});
+
+test('parseUploadProgramResult reads the structured upload result', () => {
+  const result = parseUploadProgramResult(
+    `${UPLOAD_RESULT_MARKER}{"ok":true,"target":"/root/user_latest_code.py"}`
+  );
+  assert.deepEqual(result, {
+    ok: true,
+    target: '/root/user_latest_code.py'
+  });
+});
+
+test('safe stop script waits for user processes before starting launcher', () => {
+  const script = buildSafeStopProgramScript(987);
   assert.match(script, /PREVIOUS_PID = 987/);
   assert.match(script, /os\.killpg/);
-  assert.match(script, /launcher_daemon/);
-  assert.match(script, /candidates\.append\(\[LAUNCHER, 'daemon'\]\)/);
-  assert.match(script, /stop_launcher_processes/);
+  assert.match(script, /signal\.SIGINT/);
+  assert.match(script, /signal\.SIGTERM/);
+  assert.match(script, /signal\.SIGKILL/);
+  assert.match(script, /wait_until_stopped/);
+  assert.match(script, /'\/proc\/' \+ str\(pid\) \+ '\/cmdline'/);
+  assert.doesNotMatch(script, /\['ps', 'w'\]/);
+  assert.match(script, /systemctl', 'start', 'launcher\.service/);
+  assert.doesNotMatch(script, /display_holder_processes/);
+  assert.doesNotMatch(script, /force_release_display_resources/);
+  assert.doesNotMatch(script, /systemctl', 'restart', 'launcher\.service/);
   assert.match(script, /__COCOPI_STOP_RESULT__/);
 });
 
@@ -144,7 +197,7 @@ test('buildCompressedWsScript keeps large source as one small ASCII message', as
   const message = await buildCompressedWsScript(source);
   assert.match(message, /^import base64,gzip;exec\(compile\(gzip\.decompress/);
   assert.ok(message.length < source.length);
-  assert.ok(message.length < 4096);
+  assert.ok(message.length < 2048);
 
   const encoded = message.match(/base64\.b64decode\('([^']+)'\)/)?.[1];
   assert.ok(encoded);
@@ -159,11 +212,52 @@ test('Wi-Fi run script uses user_latest_code.py and systemd', () => {
   assert.match(script, /__COCOPI_DEPLOY_RESULT__/);
 });
 
+test('Wi-Fi source upload splits large AI programs into compact messages', async () => {
+  const source = `# 中文注释\n${'print("满天星河")\n'.repeat(1400)}`;
+  const chunks = splitWifiUploadChunks(source);
+
+  assert.ok(chunks.length > 1);
+  assert.ok(chunks.every((chunk) => chunk.length <= 512));
+  assert.equal(
+    Buffer.from(chunks.join(''), 'base64').toString('utf8'),
+    source
+  );
+
+  const initScript = buildWifiUploadInitScript('user_latest_code.py');
+  const chunkScript = buildWifiUploadChunkScript(chunks[0], 0, 'user_latest_code.py');
+  const message = await buildCompressedWsScript(chunkScript);
+
+  assert.match(initScript, new RegExp(WIFI_UPLOAD_INIT_MARKER));
+  assert.match(chunkScript, new RegExp(wifiUploadChunkMarker(0)));
+  assert.ok(message.length < 1024);
+});
+
+test('Wi-Fi compile and launch stages stay below the control message limit', async () => {
+  const compileScript = buildWifiCompileUploadedScript('user_latest_code.py');
+  const launchScript = buildWifiLaunchUploadedScript('user_latest_code.py');
+  const prepareScript = buildWifiPrepareLaunchScript();
+  const compileMessage = await buildCompressedWsScript(compileScript);
+  const launchMessage = await buildCompressedWsScript(launchScript);
+  const prepareMessage = await buildCompressedWsScript(prepareScript);
+
+  assert.ok(compileMessage.length < 1024);
+  assert.ok(launchMessage.length < 1024);
+  assert.ok(prepareMessage.length < 1024);
+  assert.match(compileScript, new RegExp(WIFI_COMPILE_MARKER));
+  assert.match(prepareScript, new RegExp(WIFI_PREPARE_MARKER));
+  assert.match(launchScript, /nohup sudo python -u/);
+  assert.match(launchScript, /pgrep/);
+  assert.match(launchScript, /__COCOPI_DEPLOY_RESULT__/);
+  assert.equal(
+    parseWifiCompileResult(`${WIFI_COMPILE_MARKER}{"ok":true,"python":"/usr/bin/python3"}`).ok,
+    true
+  );
+});
+
 test('Wi-Fi stop script starts launcher.service and returns a structured result', () => {
   const script = buildWifiStopScript();
   assert.match(script, /systemctl start launcher\.service/);
   assert.match(script, /__COCOPI_STOP_RESULT__/);
   assert.match(script, /program_stopped/);
 });
-
 

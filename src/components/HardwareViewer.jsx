@@ -1,6 +1,7 @@
 import { useEffect, useRef } from 'react';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
+import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js';
 import { HARDWARE_PARTS } from '../data/hardwareParts.js';
 
 export default function CocoPiReal3DViewer({ onSelectPart, targetCamPos, zoomTrigger, resetTrigger }) {
@@ -11,7 +12,11 @@ export default function CocoPiReal3DViewer({ onSelectPart, targetCamPos, zoomTri
 
   useEffect(() => {
     if (targetCamPos && cameraRef.current) {
-      animTargetPos.current = new THREE.Vector3(...targetCamPos);
+      const target = new THREE.Vector3(...targetCamPos);
+      if (cameraRef.current.aspect < 0.95 && target.length() < 8.6) {
+        target.multiplyScalar(8.6 / Math.max(target.length(), 0.01));
+      }
+      animTargetPos.current = target;
     }
   }, [targetCamPos]);
 
@@ -31,7 +36,10 @@ export default function CocoPiReal3DViewer({ onSelectPart, targetCamPos, zoomTri
   useEffect(() => {
     if (!resetTrigger || !cameraRef.current || !controlsRef.current) return;
     controlsRef.current.target.set(0, 0, 0);
-    animTargetPos.current = new THREE.Vector3(2.8, 1.8, 5.2);
+    animTargetPos.current =
+      cameraRef.current.aspect < 0.95
+        ? new THREE.Vector3(3.5, 2.1, 8.6)
+        : new THREE.Vector3(2.8, 1.8, 5.2);
   }, [resetTrigger]);
 
   useEffect(() => {
@@ -42,21 +50,34 @@ export default function CocoPiReal3DViewer({ onSelectPart, targetCamPos, zoomTri
     const height = container.clientHeight || 440;
 
     const scene = new THREE.Scene();
-    scene.background = new THREE.Color('#ebf3ff');
+    scene.background = new THREE.Color('#eef5ff');
 
-    const camera = new THREE.PerspectiveCamera(38, width / height, 0.1, 100);
-    camera.position.set(2.8, 1.8, 5.2);
+    const narrowViewport = width / height < 0.95;
+    const camera = new THREE.PerspectiveCamera(
+      narrowViewport ? 45 : 38,
+      width / height,
+      0.1,
+      100
+    );
+    camera.position.set(...(narrowViewport ? [3.5, 2.1, 8.6] : [2.8, 1.8, 5.2]));
     cameraRef.current = camera;
 
     const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
     renderer.setSize(width, height);
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    renderer.outputColorSpace = THREE.SRGBColorSpace;
     renderer.shadowMap.enabled = true;
-    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    renderer.shadowMap.type = THREE.PCFShadowMap;
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    renderer.toneMappingExposure = 1.18;
+    renderer.toneMappingExposure = 1.08;
+    renderer.domElement.style.touchAction = 'none';
     container.innerHTML = '';
     container.appendChild(renderer.domElement);
+
+    const pmremGenerator = new THREE.PMREMGenerator(renderer);
+    const environmentTexture = pmremGenerator.fromScene(new RoomEnvironment(), 0.04).texture;
+    scene.environment = environmentTexture;
+    scene.environmentIntensity = 0.58;
 
     const controls = new OrbitControls(camera, renderer.domElement);
     controls.enableDamping = true;
@@ -74,19 +95,32 @@ export default function CocoPiReal3DViewer({ onSelectPart, targetCamPos, zoomTri
     };
     controls.addEventListener('start', stopAutoAnim);
 
-    scene.add(new THREE.AmbientLight(0xffffff, 1.05));
+    scene.add(new THREE.HemisphereLight(0xe8f3ff, 0x5f6673, 1.25));
 
-    const frontLight = new THREE.DirectionalLight(0xffffff, 1.4);
-    frontLight.position.set(5, 7, 6);
+    const frontLight = new THREE.DirectionalLight(0xffffff, 2.1);
+    frontLight.position.set(5.5, 7.5, 6.5);
     frontLight.castShadow = true;
+    frontLight.shadow.mapSize.set(2048, 2048);
+    frontLight.shadow.camera.near = 0.5;
+    frontLight.shadow.camera.far = 24;
+    frontLight.shadow.camera.left = -6;
+    frontLight.shadow.camera.right = 6;
+    frontLight.shadow.camera.top = 6;
+    frontLight.shadow.camera.bottom = -6;
+    frontLight.shadow.bias = -0.00035;
+    frontLight.shadow.normalBias = 0.018;
     scene.add(frontLight);
 
-    const backLight = new THREE.DirectionalLight(0xf8fafc, 1.35);
-    backLight.position.set(-5, 4, -7);
+    const backLight = new THREE.DirectionalLight(0xcfe2ff, 1.55);
+    backLight.position.set(-6, 4, -7);
     scene.add(backLight);
 
-    const bottomLight = new THREE.DirectionalLight(0xdbeafe, 0.95);
-    bottomLight.position.set(0, -7, 2);
+    const fillLight = new THREE.DirectionalLight(0xfff3e8, 0.7);
+    fillLight.position.set(-4, 1.5, 6);
+    scene.add(fillLight);
+
+    const bottomLight = new THREE.DirectionalLight(0xdbeafe, 0.46);
+    bottomLight.position.set(0, -6, 2);
     scene.add(bottomLight);
 
     const createPeiTexture = () => {
@@ -98,7 +132,7 @@ export default function CocoPiReal3DViewer({ onSelectPart, targetCamPos, zoomTri
       for (let i = 0; i < imgData.data.length; i += 4) {
         const y = Math.floor(i / 4 / 512);
         const layer = Math.sin(y * 1.8) * 14;
-        const noise = (Math.random() - 0.5) * 75;
+        const noise = (Math.random() - 0.5) * 24;
         const v = Math.min(255, Math.max(0, 128 + layer + noise));
         imgData.data[i] = v;
         imgData.data[i + 1] = v;
@@ -110,24 +144,52 @@ export default function CocoPiReal3DViewer({ onSelectPart, targetCamPos, zoomTri
       tex.wrapS = THREE.RepeatWrapping;
       tex.wrapT = THREE.RepeatWrapping;
       tex.repeat.set(3, 2);
+      tex.anisotropy = renderer.capabilities.getMaxAnisotropy();
       return tex;
     };
 
     const bumpTex = createPeiTexture();
 
-    const blackShellMat = new THREE.MeshStandardMaterial({
-      color: 0x202328,
-      roughness: 0.62,
-      metalness: 0.1,
+    const blackShellMat = new THREE.MeshPhysicalMaterial({
+      color: 0x242931,
+      roughness: 0.42,
+      metalness: 0.16,
       bumpMap: bumpTex,
-      bumpScale: 0.016
+      bumpScale: 0.009,
+      clearcoat: 0.28,
+      clearcoatRoughness: 0.55,
+      envMapIntensity: 0.82
     });
 
-    const darkCavityMat = new THREE.MeshStandardMaterial({ color: 0x08090b, roughness: 0.9 });
-    const whiteSwitchMat = new THREE.MeshStandardMaterial({ color: 0xf8fafc, roughness: 0.25 });
-    const creamSocketMat = new THREE.MeshStandardMaterial({ color: 0xede8df, roughness: 0.4 });
-    const goldPinMat = new THREE.MeshStandardMaterial({ color: 0xfbbf24, roughness: 0.2, metalness: 0.9 });
-    const silverMetalMat = new THREE.MeshStandardMaterial({ color: 0xcbd5e1, roughness: 0.25, metalness: 0.88 });
+    const darkCavityMat = new THREE.MeshStandardMaterial({
+      color: 0x080a0e,
+      roughness: 0.82,
+      metalness: 0.08
+    });
+    const whiteSwitchMat = new THREE.MeshPhysicalMaterial({
+      color: 0xf8fafc,
+      roughness: 0.22,
+      clearcoat: 0.34,
+      clearcoatRoughness: 0.28
+    });
+    const creamSocketMat = new THREE.MeshPhysicalMaterial({
+      color: 0xf0ebe3,
+      roughness: 0.34,
+      clearcoat: 0.18,
+      clearcoatRoughness: 0.46
+    });
+    const goldPinMat = new THREE.MeshPhysicalMaterial({
+      color: 0xf6b928,
+      roughness: 0.18,
+      metalness: 0.92,
+      envMapIntensity: 1.15
+    });
+    const silverMetalMat = new THREE.MeshPhysicalMaterial({
+      color: 0xd5dde8,
+      roughness: 0.2,
+      metalness: 0.9,
+      envMapIntensity: 1.2
+    });
 
     const W = 4.2;
     const H = 2.7;
@@ -236,7 +298,13 @@ export default function CocoPiReal3DViewer({ onSelectPart, targetCamPos, zoomTri
       ctx.fillText(text, 256, 64);
 
       const tex = new THREE.CanvasTexture(canvas);
-      const mat = new THREE.MeshBasicMaterial({ map: tex, transparent: true });
+      tex.colorSpace = THREE.SRGBColorSpace;
+      tex.anisotropy = renderer.capabilities.getMaxAnisotropy();
+      const mat = new THREE.MeshBasicMaterial({
+        map: tex,
+        transparent: true,
+        depthWrite: false
+      });
       return new THREE.Mesh(new THREE.PlaneGeometry(w, h), mat);
     };
 
@@ -282,13 +350,22 @@ export default function CocoPiReal3DViewer({ onSelectPart, targetCamPos, zoomTri
         ctx.font = '20px "Microsoft YaHei", sans-serif';
         ctx.fillText(app.name, app.x, app.y + 82);
       });
-      return new THREE.CanvasTexture(canvas);
+      const texture = new THREE.CanvasTexture(canvas);
+      texture.colorSpace = THREE.SRGBColorSpace;
+      texture.anisotropy = renderer.capabilities.getMaxAnisotropy();
+      return texture;
     };
 
     const frontGroup = new THREE.Group();
     const screenBezel = new THREE.Mesh(
       new THREE.BoxGeometry(2.75, 2.02, 0.04),
-      new THREE.MeshStandardMaterial({ color: 0x0b0c0e, roughness: 0.2, metalness: 0.3 })
+      new THREE.MeshPhysicalMaterial({
+        color: 0x080b10,
+        roughness: 0.24,
+        metalness: 0.28,
+        clearcoat: 0.3,
+        clearcoatRoughness: 0.24
+      })
     );
     screenBezel.position.set(-0.22, 0.02, D / 2 - 0.005);
     frontGroup.add(screenBezel);
@@ -301,11 +378,27 @@ export default function CocoPiReal3DViewer({ onSelectPart, targetCamPos, zoomTri
         roughness: 0.15,
         emissive: new THREE.Color(0xffffff),
         emissiveMap: sTex,
-        emissiveIntensity: 0.35
+        emissiveIntensity: 0.24
       })
     );
     lcdMesh.position.set(-0.22, 0.02, D / 2 + 0.018);
     frontGroup.add(lcdMesh);
+
+    const screenGlass = new THREE.Mesh(
+      new THREE.PlaneGeometry(2.52, 1.84),
+      new THREE.MeshPhysicalMaterial({
+        color: 0xdbeafe,
+        roughness: 0.06,
+        metalness: 0.04,
+        transparent: true,
+        opacity: 0.13,
+        clearcoat: 1,
+        clearcoatRoughness: 0.04,
+        depthWrite: false
+      })
+    );
+    screenGlass.position.set(-0.22, 0.02, D / 2 + 0.032);
+    frontGroup.add(screenGlass);
 
     for (let r = 0; r < 5; r++) {
       for (let c = 0; c < 4; c++) {
@@ -347,7 +440,14 @@ export default function CocoPiReal3DViewer({ onSelectPart, targetCamPos, zoomTri
 
     const lensGlass = new THREE.Mesh(
       new THREE.SphereGeometry(0.18, 24, 16),
-      new THREE.MeshStandardMaterial({ color: 0x0f172a, roughness: 0.05, metalness: 0.92 })
+      new THREE.MeshPhysicalMaterial({
+        color: 0x0b1220,
+        roughness: 0.05,
+        metalness: 0.76,
+        clearcoat: 1,
+        clearcoatRoughness: 0.03,
+        envMapIntensity: 1.35
+      })
     );
     lensGlass.scale.z = 0.35;
     lensGlass.position.set(0, 0, -D / 2 - 0.11);
@@ -413,35 +513,113 @@ export default function CocoPiReal3DViewer({ onSelectPart, targetCamPos, zoomTri
     cocopiGroup.add(tagPart(leftGroup, 'power_switch_left'));
 
     const rightGroup = new THREE.Group();
-    const typecOuter = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.08, 0.08, 0.36, 16),
+    const createRoundedFacePlate = (width, height, depth, radius, material) => {
+      const shape = new THREE.Shape();
+      const hw = width / 2;
+      const hh = height / 2;
+      shape.moveTo(-hw + radius, -hh);
+      shape.lineTo(hw - radius, -hh);
+      shape.quadraticCurveTo(hw, -hh, hw, -hh + radius);
+      shape.lineTo(hw, hh - radius);
+      shape.quadraticCurveTo(hw, hh, hw - radius, hh);
+      shape.lineTo(-hw + radius, hh);
+      shape.quadraticCurveTo(-hw, hh, -hw, hh - radius);
+      shape.lineTo(-hw, -hh + radius);
+      shape.quadraticCurveTo(-hw, -hh, -hw + radius, -hh);
+
+      const geometry = new THREE.ExtrudeGeometry(shape, {
+        depth,
+        steps: 1,
+        bevelEnabled: true,
+        bevelSegments: 2,
+        bevelSize: 0.008,
+        bevelThickness: 0.008
+      });
+      const mesh = new THREE.Mesh(geometry, material);
+      mesh.rotation.y = Math.PI / 2;
+      return mesh;
+    };
+
+    const typecHousing = createRoundedFacePlate(0.58, 0.78, 0.08, 0.08, blackShellMat);
+    typecHousing.position.set(W / 2 - 0.18, -0.58, 0.27);
+    rightGroup.add(typecHousing);
+
+    const typecRecess = createRoundedFacePlate(0.34, 0.62, 0.07, 0.09, darkCavityMat);
+    typecRecess.position.set(W / 2 - 0.1, -0.58, 0.27);
+    rightGroup.add(typecRecess);
+
+    const typecRim = createRoundedFacePlate(0.22, 0.48, 0.025, 0.11, silverMetalMat);
+    typecRim.position.set(W / 2 - 0.045, -0.58, 0.27);
+    rightGroup.add(typecRim);
+
+    const typecCavity = createRoundedFacePlate(0.17, 0.42, 0.026, 0.085, darkCavityMat);
+    typecCavity.position.set(W / 2 - 0.04, -0.58, 0.27);
+    rightGroup.add(typecCavity);
+
+    const typecTongue = new THREE.Mesh(
+      new THREE.BoxGeometry(0.02, 0.18, 0.055),
       silverMetalMat
     );
-    typecOuter.position.set(W / 2 - 0.25, -0.62, 0.24);
-    rightGroup.add(typecOuter);
+    typecTongue.position.set(W / 2 - 0.012, -0.58, 0.27);
+    rightGroup.add(typecTongue);
 
-    const typecInner = new THREE.Mesh(new THREE.BoxGeometry(0.04, 0.28, 0.1), darkCavityMat);
-    typecInner.position.set(W / 2 - 0.21, -0.62, 0.24);
-    rightGroup.add(typecInner);
+    const batteryHousing = createRoundedFacePlate(0.4, 0.58, 0.08, 0.04, blackShellMat);
+    batteryHousing.position.set(W / 2 - 0.02, -0.04, -0.29);
+    rightGroup.add(batteryHousing);
 
-    const batCavity = new THREE.Mesh(new THREE.BoxGeometry(0.14, 0.52, 0.32), darkCavityMat);
-    batCavity.position.set(W / 2 - 0.03, -0.08, -0.25);
-    rightGroup.add(batCavity);
+    const batteryCavity = createRoundedFacePlate(0.25, 0.4, 0.05, 0.025, darkCavityMat);
+    batteryCavity.position.set(W / 2 + 0.035, -0.04, -0.29);
+    rightGroup.add(batteryCavity);
 
-    [-0.12, 0.1].forEach((dy) => {
-      const batPin = new THREE.Mesh(new THREE.CylinderGeometry(0.038, 0.038, 0.14, 12), goldPinMat);
+    [-0.2, 0.2].forEach((dy) => {
+      const trim = new THREE.Mesh(
+        new THREE.BoxGeometry(0.022, 0.026, 0.3),
+        creamSocketMat
+      );
+      trim.position.set(W / 2 + 0.09, -0.04 + dy, -0.29);
+      rightGroup.add(trim);
+    });
+
+    [-0.145, 0.145].forEach((dz) => {
+      const trim = new THREE.Mesh(
+        new THREE.BoxGeometry(0.022, 0.36, 0.026),
+        creamSocketMat
+      );
+      trim.position.set(W / 2 + 0.09, -0.04, -0.29 + dz);
+      rightGroup.add(trim);
+    });
+
+    [-0.1, 0.1].forEach((dy) => {
+      const batPin = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.034, 0.034, 0.065, 18),
+        goldPinMat
+      );
       batPin.rotation.z = Math.PI / 2;
-      batPin.position.set(W / 2 - 0.03, -0.08 + dy, -0.25);
+      batPin.position.set(W / 2 + 0.1, -0.04 + dy, -0.29);
       rightGroup.add(batPin);
     });
 
-    const extSwitchBase = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.42, 0.32), creamSocketMat);
-    extSwitchBase.position.set(W / 2 - 0.02, -0.68, -0.25);
-    rightGroup.add(extSwitchBase);
+    const switchFrame = createRoundedFacePlate(0.34, 0.5, 0.07, 0.035, creamSocketMat);
+    switchFrame.position.set(W / 2 - 0.03, -0.72, -0.29);
+    rightGroup.add(switchFrame);
 
-    const extSwitchCap = new THREE.Mesh(new THREE.BoxGeometry(0.18, 0.26, 0.24), whiteSwitchMat);
-    extSwitchCap.position.set(W / 2 + 0.04, -0.72, -0.25);
+    const switchTrack = createRoundedFacePlate(0.21, 0.36, 0.065, 0.025, darkCavityMat);
+    switchTrack.position.set(W / 2 + 0.015, -0.72, -0.29);
+    rightGroup.add(switchTrack);
+
+    const extSwitchCap = new THREE.Mesh(
+      new THREE.BoxGeometry(0.11, 0.24, 0.18),
+      whiteSwitchMat
+    );
+    extSwitchCap.position.set(W / 2 + 0.08, -0.65, -0.29);
     rightGroup.add(extSwitchCap);
+
+    const switchGroove = new THREE.Mesh(
+      new THREE.BoxGeometry(0.012, 0.03, 0.11),
+      darkCavityMat
+    );
+    switchGroove.position.set(W / 2 + 0.14, -0.65, -0.29);
+    rightGroup.add(switchGroove);
     cocopiGroup.add(tagPart(rightGroup, 'right_io'));
 
     const topGroup = new THREE.Group();
@@ -504,6 +682,26 @@ export default function CocoPiReal3DViewer({ onSelectPart, targetCamPos, zoomTri
     });
     cocopiGroup.add(tagPart(bottomGroup, 'bottom_ports'));
 
+    const contactShadow = new THREE.Mesh(
+      new THREE.CircleGeometry(3.6, 64),
+      new THREE.ShadowMaterial({
+        color: 0x10203a,
+        opacity: 0.2,
+        transparent: true
+      })
+    );
+    contactShadow.rotation.x = -Math.PI / 2;
+    contactShadow.position.set(0, -H / 2 - 0.46, 0);
+    contactShadow.receiveShadow = true;
+    scene.add(contactShadow);
+
+    cocopiGroup.traverse((child) => {
+      if (!child.isMesh) return;
+      const materials = Array.isArray(child.material) ? child.material : [child.material];
+      child.castShadow = !materials.some((material) => material?.transparent);
+      child.receiveShadow = true;
+    });
+
     const raycaster = new THREE.Raycaster();
     const pointer = new THREE.Vector2();
     let downX = 0;
@@ -539,6 +737,7 @@ export default function CocoPiReal3DViewer({ onSelectPart, targetCamPos, zoomTri
       const w = container.clientWidth;
       const h = container.clientHeight;
       camera.aspect = w / h;
+      camera.fov = camera.aspect < 0.95 ? 45 : 38;
       camera.updateProjectionMatrix();
       renderer.setSize(w, h);
     };
@@ -565,6 +764,8 @@ export default function CocoPiReal3DViewer({ onSelectPart, targetCamPos, zoomTri
       domElem.removeEventListener('mousedown', onMouseDown);
       domElem.removeEventListener('mouseup', onMouseUp);
       window.removeEventListener('resize', handleResize);
+      environmentTexture.dispose();
+      pmremGenerator.dispose();
       renderer.dispose();
     };
   }, []);
@@ -572,7 +773,7 @@ export default function CocoPiReal3DViewer({ onSelectPart, targetCamPos, zoomTri
   return (
     <div
       ref={mountRef}
-      className="w-full h-[440px] rounded-3xl overflow-hidden cursor-grab active:cursor-grabbing relative shadow-inner border border-blue-200 bg-[#ebf3ff]"
+      className="relative h-[330px] w-full cursor-grab overflow-hidden rounded-[var(--radius-box)] border border-accent-line bg-accent-soft active:cursor-grabbing sm:h-[380px] lg:h-[470px]"
     />
   );
 }
