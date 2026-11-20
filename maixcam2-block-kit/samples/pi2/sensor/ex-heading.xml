@@ -1,0 +1,116 @@
+<xml xmlns="http://www.w3.org/1999/xhtml" type="IoT">
+  <block type="ai_lcd_screeninit" id="[JQs_/~Wd$fjl0dVFQW$" x="238" y="49">
+    <field name="isScreen">False</field>
+    <next>
+      <block type="ai_lcd_createnonecarvas" id="9h`%5Al)[T-0Y[~nh,Al">
+        <field name="varitem">canvas</field>
+        <value name="wh">
+          <block type="lcd_set_width_height" id="l3pv$F,POXz+_aTy?@T]">
+            <value name="WIDTH">
+              <shadow type="math_number" id="VKIRl3!R{=86;fDX1R^B">
+                <field name="NUM">320</field>
+              </shadow>
+            </value>
+            <value name="HEIGHT">
+              <shadow type="math_number" id="CV)ZgpdXc2AfPW5Qr@co">
+                <field name="NUM">240</field>
+              </shadow>
+            </value>
+          </block>
+        </value>
+        <next>
+          <block type="maixcam2_imu_calibrate"><next><block type="maixcam2_imu_heading_reset"><next><block type="controls_repeat_forever" id="CJRsu#Z|G{w@,lsD!ba{">
+            <statement name="DO">
+              <block type="ai_lcd_clearcanvas" id="as#Cg@W,1m?P=/#,@[s3">
+                <field name="varitem">canvas</field>
+                <next>
+                  <block type="ai_lcd_textcarvas" id=",LV^1d@8sq)$I1itT#=,">
+                    <field name="varitem">canvas</field>
+                    <value name="POSA">
+                      <block type="lcd_set_position" id="j#(*CZt{#z{frFyb8GtE">
+                        <value name="POSX">
+                          <shadow type="math_number" id="X|?S4NL,r]/nLJE6lfz%">
+                            <field name="NUM">0</field>
+                          </shadow>
+                        </value>
+                        <value name="POSY">
+                          <shadow type="math_number" id="uo$ui_lGmu0|XgS]`s20">
+                            <field name="NUM">0</field>
+                          </shadow>
+                        </value>
+                      </block>
+                    </value>
+                    <value name="CONTENT">
+                      <shadow type="text" id="sG3ORn@b:[z^InzIrxqF">
+                        <field name="TEXT" />
+                      </shadow>
+                      <block type="text_join" id="X#|)2|#bp#J;@,z*8Vc2">
+                        <mutation items="2" />
+                        <value name="ADD0">
+                          <block type="text" id="oBd9TCAM=HvdL-,=09nY">
+                            <field name="TEXT">航向角（右转为正）：</field>
+                          </block>
+                        </value>
+                        <value name="ADD1">
+                          <block type="maixcam2_imu_heading">
+                            </block>
+                        </value>
+                      </block>
+                    </value>
+                    <value name="COLOR">
+                      <block type="lcd_set_color" id="4fO6N2F=ZFT5.,~:R4Bb">
+                        <field name="COLOR">#3366ff</field>
+                      </block>
+                    </value>
+                    <value name="Scale">
+                      <shadow type="math_number" id="Fr%o|XKNIZ(i*!$l~@u7">
+                        <field name="NUM">1</field>
+                      </shadow>
+                    </value>
+                    <next>
+                      <block type="ai_lcd_textcarvas">
+                    <field name="varitem">canvas</field>
+                    <value name="POSA">
+                      <block type="lcd_set_position">
+                        <value name="POSX">
+                          <shadow type="math_number">
+                            <field name="NUM">0</field>
+                          </shadow>
+                        </value>
+                        <value name="POSY">
+                          <shadow type="math_number">
+                            <field name="NUM">30</field>
+                          </shadow>
+                        </value>
+                      </block>
+                    </value>
+                    <value name="CONTENT">
+                      <shadow type="text">
+                        <field name="TEXT" />
+                      </shadow>
+                      <block type="text"><field name="TEXT">按用户按键：航向角归零</field></block></value>
+                    <value name="COLOR">
+                      <block type="lcd_set_color">
+                        <field name="COLOR">#3366ff</field>
+                      </block>
+                    </value>
+                    <value name="Scale">
+                      <shadow type="math_number">
+                        <field name="NUM">1</field>
+                      </shadow>
+                    </value>
+                    <next><block type="controls_if"><value name="IF0"><block type="maixcam2_key_pressed" /></value><statement name="DO0"><block type="maixcam2_imu_heading_reset" /></statement><next><block type="ai_lcd_showcarvas_set_display" id="a#`hs]t3jRLSTk8B8qPd">
+                            <field name="varitem">canvas</field>
+                          </block>
+                        </next></block></next></block>
+                </next>
+                  </block>
+                </next>
+              </block>
+            </statement>
+          </block>
+        </next></block></next></block></next>
+      </block>
+    </next>
+  </block>
+</xml>

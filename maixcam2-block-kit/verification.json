@@ -1,0 +1,23 @@
+{
+  "generatedAt": "2026-11-19",
+  "toolboxCategoryCount": 16,
+  "toolboxBlockTypeCount": 354,
+  "topLevelCategoryBlockCounts": {
+    "MaixCAM2 设备": 48,
+    "媒体处理": 28,
+    "MaixCAM2 AI": 148
+  },
+  "quickStartSectionPresent": false,
+  "languageSwitchVerified": ["zh-hans", "zh-hant", "en"],
+  "placeholderMessageLabelsPresent": false,
+  "missingBlockDefinitions": [],
+  "missingPythonGenerators": [],
+  "blackBlockCount": 0,
+  "sampleCount": 52,
+  "loadedSampleCount": 52,
+  "samplesWithGeneratedCode": 52,
+  "samplesWithMaixApi": 52,
+  "samplesClosedAfterLoad": 52,
+  "browserRuntimeErrors": [],
+  "screenshot": "../.review/maixcam2-kit-migrated.png"
+}

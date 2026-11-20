@@ -109,11 +109,16 @@ test('parseDeploymentResult ignores malformed status data', () => {
   assert.equal(parseDeploymentResult(`${DEPLOY_RESULT_MARKER}{bad json}`), null);
 });
 
-test('upload script writes and compiles the program without running it', () => {
+test('upload script writes, compiles and registers the recent program without running it', () => {
   const script = buildUploadProgramScript('print("uploaded")', 'user_latest_code.py');
   assert.match(script, /SOURCE_CODE = "print\(\\"uploaded\\"\)"/);
   assert.match(script, /\/root\/user_latest_code\.py/);
   assert.match(script, /py_compile/);
+  assert.match(script, /RECENT_PROGRAM_PATH = '\/tmp\/event'/);
+  assert.match(script, /EVENT_PROGRAM_PATH = '\/root\/event\.py'/);
+  assert.match(script, /shutil\.copyfile\(TARGET_PATH, EVENT_PROGRAM_PATH\)/);
+  assert.match(script, /os\.symlink\(EVENT_PROGRAM_PATH, RECENT_PROGRAM_STAGING\)/);
+  assert.match(script, /os\.replace\(RECENT_PROGRAM_STAGING, RECENT_PROGRAM_PATH\)/);
   assert.match(script, new RegExp(UPLOAD_RESULT_MARKER));
   assert.doesNotMatch(script, /Popen\(/);
 });

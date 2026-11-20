@@ -95,7 +95,11 @@ pwd
 
 ## MaixCAM2 图形化编程
 
-页面内置 Blockly 积木编辑器，提供摄像头、屏幕显示、文字与矩形绘制、触摸、延时、逻辑、数学、文本和变量积木。生成的代码：
+页面已接入从参考 CocoBlockly 项目迁移的 MaixCAM2 Block Kit，包含 16 个分类、354 个工具箱 block type 和 52 个设备样例。点击积木工具箱上方的“样例”可按屏幕、相机、麦克风、扬声器、传感器、图像处理、视频、AI 视觉、AI 听觉和 LLM 分类加载 XML。
+
+迁移工具包位于 `maixcam2-block-kit/`，浏览器加载器位于 `src/lib/maixcam2Kit.js`。当前 npm Blockly 运行时不会被旧版压缩文件覆盖。
+
+生成的代码：
 
 - 使用 `camera.Camera()`、`display.Display()` 和 `touchscreen.TouchScreen()`。
 - 使用 `while not app.need_exit():`，不会生成不可退出的 `while True`。
@@ -105,7 +109,7 @@ pwd
 创作台顶部提供“添加设备、保存、上传、运行、重启”操作：
 
 - “保存”会把当前 Python 程序下载到本地 `.py` 文件，同时保留浏览器草稿。
-- “上传”只写入并检查设备上的 `/root/user_latest_code.py`，不会启动程序。
+- “上传”会写入并检查设备上的 `/root/user_latest_code.py`，同步生成设备“最近程序”使用的 `/root/event.py`，并把 `/tmp/event` 指向 `/root/event.py`；上传本身不会立即启动程序，“运行”才会进入开发模式并执行代码。
 - “重启”会在确认后向已连接设备发送重启命令。
 - 语言菜单支持简体中文、香港繁体中文和 English，选择结果会写入 `?lang=` 与浏览器本地存储。
 

@@ -116,15 +116,23 @@ body {
 
 .blockly-workspace-grid {
   display: grid;
+  height: 100%;
   grid-template-columns:
-    var(--blockly-left-width, 220px)
+    min(var(--blockly-left-width, 220px), 16vw)
     8px
-    minmax(480px, 1fr)
+    minmax(0, 1fr)
     8px
-    var(--blockly-right-width, 390px);
+    min(var(--blockly-right-width, 390px), 27vw);
   gap: 8px;
   align-items: stretch;
-  min-height: 780px;
+  min-height: 0;
+  min-width: 0;
+}
+
+.blockly-left-order,
+.blockly-editor-order,
+.blockly-right-order {
+  min-height: 0;
 }
 
 .blockly-resize-handle {
@@ -181,14 +189,15 @@ body {
 
 .blockly-editor-card {
   display: flex;
+  height: 100%;
   min-width: 0;
   flex-direction: column;
-  min-height: 780px;
+  min-height: 0;
 }
 
 .blockly-canvas-wrap {
   position: relative;
-  min-height: 520px;
+  min-height: 0;
   flex: 1;
 }
 
@@ -204,10 +213,17 @@ body {
 }
 
 .blockly-console {
-  height: var(--blockly-console-height, 176px);
-  min-height: 110px;
-  max-height: 380px;
-  flex: 0 0 var(--blockly-console-height, 176px);
+  height: var(--blockly-console-height, 190px);
+  min-height: 84px;
+  max-height: min(32vh, 260px);
+  flex: 0 0 var(--blockly-console-height, 190px);
+}
+
+.blockly-console.is-collapsed {
+  height: 42px;
+  min-height: 42px;
+  max-height: 42px;
+  flex-basis: 42px;
 }
 
 .blockly-python-area {
@@ -215,30 +231,21 @@ body {
   tab-size: 4;
 }
 
-@media (max-width: 1279px) {
+@media (max-width: 767px) {
   .blockly-workspace-grid {
     grid-template-columns: 1fr;
+    gap: 0;
     min-height: 0;
   }
 
-  .blockly-resize-handle {
+  .blockly-resize-handle,
+  .blockly-left-order,
+  .blockly-right-order {
     display: none;
   }
 
   .blockly-editor-card {
-    min-height: 680px;
-  }
-
-  .blockly-left-order {
-    order: 2;
-  }
-
-  .blockly-editor-order {
-    order: 1;
-  }
-
-  .blockly-right-order {
-    order: 3;
+    min-height: 0;
   }
 }
 
@@ -286,6 +293,25 @@ body {
 .maix-blockly .blocklyZoom > image,
 .maix-blockly .blocklyTrash > image {
   opacity: 0.64;
+}
+
+.maix-blockly .blocklyEditing .blocklyText,
+.maix-blockly .blocklyEditing > text {
+  visibility: hidden;
+}
+
+.blocklyWidgetDiv .blocklyHtmlInput {
+  overflow: hidden;
+  background: var(--color-surface);
+  color: var(--color-ink);
+  text-shadow: none;
+  white-space: nowrap;
+}
+
+@media (max-width: 767px) {
+  .maix-blockly .blocklyToolbox {
+    display: block !important;
+  }
 }
 
 .blocklyWidgetDiv,

@@ -42,10 +42,22 @@ import subprocess
 RESULT_MARKER = ${JSON.stringify(UPLOAD_RESULT_MARKER)}
 SOURCE_CODE = ${JSON.stringify(String(pythonCode || ''))}
 TARGET_PATH = ${JSON.stringify(targetPath)}
+RECENT_PROGRAM_PATH = '/tmp/event'
+RECENT_PROGRAM_STAGING = '/tmp/.cocopi-recent-program'
+EVENT_PROGRAM_PATH = '/root/event.py'
 
 
 def emit(payload):
     print(RESULT_MARKER + json.dumps(payload, ensure_ascii=False))
+
+
+def update_recent_program():
+    shutil.copyfile(TARGET_PATH, EVENT_PROGRAM_PATH)
+    for path in (RECENT_PROGRAM_STAGING, RECENT_PROGRAM_PATH):
+        if os.path.lexists(path):
+            os.unlink(path)
+    os.symlink(EVENT_PROGRAM_PATH, RECENT_PROGRAM_STAGING)
+    os.replace(RECENT_PROGRAM_STAGING, RECENT_PROGRAM_PATH)
 
 
 try:
@@ -65,9 +77,11 @@ try:
             (compile_result.stdout + compile_result.stderr)[-3000:]
             or 'Python 语法检查失败'
         )
+    update_recent_program()
     emit({
         'ok': True,
         'target': TARGET_PATH,
+        'recent_program': EVENT_PROGRAM_PATH,
         'python': python_cmd
     })
 except Exception as error:

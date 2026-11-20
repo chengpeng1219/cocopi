@@ -4,8 +4,11 @@ import {
   ArrowUpRight,
   Camera,
   Check,
+  ChevronDown,
+  ChevronUp,
   Code2,
   Copy,
+  FolderOpen,
   Loader2,
   Lock,
   Maximize2,
@@ -25,13 +28,19 @@ import {
 } from 'lucide-react';
 import {
   MAIX_THEME,
-  applyMaixBlockLocale,
   createStarterWorkspaceState,
-  generateMaixPython,
-  getMaixToolbox
 } from '../lib/maixBlocks.js';
-import { MAIXPY_PROGRAMS } from '../data/maixpyPrograms.js';
 import { useI18n } from '../lib/i18n.jsx';
+import {
+  generateMaixcam2Python,
+  getMaixcam2CategoryList,
+  getMaixcam2SampleGroups,
+  getMaixcam2Toolbox,
+  initializeMaixcam2Kit,
+  loadMaixcam2Sample,
+  scanMaixcam2ToolboxDefinitions
+} from '../lib/maixcam2Kit.js';
+import Maixcam2ExamplesModal from './Maixcam2ExamplesModal.jsx';
 import {
   LOG_TONE_CLASS,
   Notice,
@@ -43,6 +52,8 @@ import {
 } from './ui.jsx';
 
 const BLOCKLY_STORAGE_KEY = 'cocopi-blockly-workspace-v1';
+const DEFAULT_CONSOLE_HEIGHT = 190;
+const TRASH_FLYOUT_WIDTH = 300;
 const CATEGORY_SYMBOLS = ['◇', '▦', '↯', '⑂', '＋', 'T', '◎'];
 const QUICK_COMMANDS = [
   {
@@ -76,6 +87,36 @@ function persistWorkspaceState(workspace) {
   }
 }
 
+function resetWorkspaceView(workspace) {
+  if (!workspace) return;
+  Blockly.svgResize(workspace);
+  const startScale = workspace.options?.zoomOptions?.startScale;
+  if (Number.isFinite(startScale)) workspace.setScale(startScale);
+  workspace.scrollCenter();
+}
+
+function constrainTrashFlyout(workspace) {
+  const flyout = workspace.trashcan?.flyout;
+  if (!flyout || flyout.__cocopiConstrainedWidth) return;
+  const originalGetFlyoutScale = flyout.getFlyoutScale.bind(flyout);
+  flyout.getFlyoutScale = function getConstrainedFlyoutScale() {
+    const baseScale = originalGetFlyoutScale();
+    const contents = this.getContents?.() || [];
+    const widestBlock = contents.reduce(
+      (width, item) =>
+        Math.max(width, item.getElement().getBoundingRectangle().getWidth()),
+      0
+    );
+    if (!widestBlock) return baseScale;
+    const chromeWidth =
+      (this.MARGIN || 20) * 1.5 + (this.tabWidth_ || 0) + 15;
+    const constrainedScale =
+      (TRASH_FLYOUT_WIDTH - chromeWidth) / Math.max(1, widestBlock);
+    return Math.max(0.1, Math.min(baseScale, constrainedScale));
+  };
+  flyout.__cocopiConstrainedWidth = true;
+}
+
 export default function BlocklySection({
   id = 'blocks',
   code,
@@ -92,8 +133,6 @@ export default function BlocklySection({
   lastRunError,
   onAiRepair,
   onAiRepairAndRun,
-  activeProgram,
-  onSelectProgram,
   onRunCode,
   onStop,
   onOpenDevice,
@@ -107,8 +146,8 @@ export default function BlocklySection({
   onSendCommand
 }) {
   const { language, t } = useI18n();
-  const toolbox = getMaixToolbox(language);
-  const categories = toolbox.contents.filter((item) => item.kind === 'category');
+  const categories = getMaixcam2CategoryList(language);
+  const sampleGroups = getMaixcam2SampleGroups();
   const workspaceGridRef = useRef(null);
   const editorRef = useRef(null);
   const containerRef = useRef(null);
@@ -124,7 +163,9 @@ export default function BlocklySection({
   const [copied, setCopied] = useState(false);
   const [leftWidth, setLeftWidth] = useState(220);
   const [rightWidth, setRightWidth] = useState(390);
-  const [consoleHeight, setConsoleHeight] = useState(176);
+  const [consoleHeight, setConsoleHeight] = useState(DEFAULT_CONSOLE_HEIGHT);
+  const [terminalCollapsed, setTerminalCollapsed] = useState(false);
+  const [showExamples, setShowExamples] = useState(false);
 
   const connected = connStatus === 'connected';
   const filteredCategories = categories
@@ -138,7 +179,7 @@ export default function BlocklySection({
   }, [onCodeChange]);
 
   const emitWorkspaceCode = (workspace) => {
-    const nextCode = generateMaixPython(workspace);
+    const nextCode = generateMaixcam2Python(workspace);
     onCodeChangeRef.current?.(nextCode);
     persistWorkspaceState(workspace);
   };
@@ -150,13 +191,21 @@ export default function BlocklySection({
       workspace
     );
     emitWorkspaceCode(workspace);
-    requestAnimationFrame(() => workspace.zoomToFit());
+    requestAnimationFrame(() => resetWorkspaceView(workspace));
   };
 
   useEffect(() => {
     if (!containerRef.current) return;
 
-    applyMaixBlockLocale(language);
+    initializeMaixcam2Kit(language);
+    const toolbox = getMaixcam2Toolbox(language);
+    const definitionScan = scanMaixcam2ToolboxDefinitions();
+    if (
+      definitionScan.missingBlocks.length ||
+      definitionScan.missingGenerators.length
+    ) {
+      console.error('[MaixCAM2 Block Kit] missing definitions', definitionScan);
+    }
     containerRef.current.innerHTML = '';
     const compactViewport = containerRef.current.clientWidth < 640;
     const workspace = Blockly.inject(containerRef.current, {
@@ -171,7 +220,7 @@ export default function BlocklySection({
       move: {
         scrollbars: false,
         drag: true,
-        wheel: true
+        wheel: false
       },
       grid: {
         spacing: 24,
@@ -181,7 +230,7 @@ export default function BlocklySection({
       },
       zoom: {
         controls: true,
-        wheel: true,
+        wheel: false,
         startScale: compactViewport ? 0.6 : 0.82,
         maxScale: compactViewport ? 1.1 : 1.25,
         minScale: compactViewport ? 0.35 : 0.5,
@@ -190,6 +239,10 @@ export default function BlocklySection({
       media: `${import.meta.env.BASE_URL}blockly-media/`
     });
     blocklyWorkspaceRef.current = workspace;
+    constrainTrashFlyout(workspace);
+    if (import.meta.env.DEV) {
+      window.__COCOPI_BLOCKLY_WORKSPACE__ = workspace;
+    }
 
     try {
       Blockly.serialization.workspaces.load(
@@ -203,7 +256,7 @@ export default function BlocklySection({
       );
     }
     emitWorkspaceCode(workspace);
-    requestAnimationFrame(() => workspace.zoomToFit());
+    requestAnimationFrame(() => resetWorkspaceView(workspace));
 
     const refreshCode = (event) => {
       if (event?.isUiEvent) return;
@@ -220,19 +273,110 @@ export default function BlocklySection({
     const resizeObserver = new ResizeObserver(() => Blockly.svgResize(workspace));
     resizeObserver.observe(containerRef.current.parentElement);
 
+    let panState = null;
+    const handleWheel = (event) => {
+      if (event.target instanceof Element && event.target.closest('.blocklyFlyout')) {
+        return;
+      }
+      event.preventDefault();
+      const multiplier =
+        event.deltaMode === WheelEvent.DOM_DELTA_LINE
+          ? 16
+          : event.deltaMode === WheelEvent.DOM_DELTA_PAGE
+            ? 100
+            : 1;
+      workspace.scroll(
+        workspace.scrollX - event.deltaX * multiplier,
+        workspace.scrollY - event.deltaY * multiplier
+      );
+    };
+    const handlePointerDown = (event) => {
+      if (event.button !== 0 || !(event.target instanceof Element)) return;
+      const target = event.target;
+      if (!target.closest('.blocklySvg')) return;
+      if (target.closest('.blocklyTrash')) {
+        workspace.getToolbox()?.clearSelection();
+        setActiveCategory(-1);
+        return;
+      }
+      if (
+        target.closest(
+          '.blocklyFlyout, .blocklyToolboxDiv, .blocklyZoom, .blocklyScrollbar'
+        )
+      ) {
+        return;
+      }
+
+      workspace.hideChaff();
+      workspace.getToolbox()?.clearSelection();
+      setActiveCategory(-1);
+
+      if (target.closest('.blocklyBlockCanvas, .blocklyBubbleCanvas')) return;
+      panState = {
+        pointerId: event.pointerId,
+        clientX: event.clientX,
+        clientY: event.clientY,
+        scrollX: workspace.scrollX,
+        scrollY: workspace.scrollY
+      };
+      event.preventDefault();
+      event.stopPropagation();
+    };
+    const handlePointerMove = (event) => {
+      if (!panState || event.pointerId !== panState.pointerId) return;
+      workspace.scroll(
+        panState.scrollX - (event.clientX - panState.clientX),
+        panState.scrollY - (event.clientY - panState.clientY)
+      );
+      event.preventDefault();
+      event.stopPropagation();
+    };
+    const handlePointerUp = (event) => {
+      if (!panState || event.pointerId !== panState.pointerId) return;
+      panState = null;
+    };
+    containerRef.current.addEventListener('wheel', handleWheel, {
+      capture: true,
+      passive: false
+    });
+    containerRef.current.addEventListener('pointerdown', handlePointerDown, true);
+    window.addEventListener('pointermove', handlePointerMove, true);
+    window.addEventListener('pointerup', handlePointerUp, true);
+    window.addEventListener('pointercancel', handlePointerUp, true);
+
     return () => {
       if (copiedTimerRef.current) clearTimeout(copiedTimerRef.current);
       if (refreshTimerRef.current) clearTimeout(refreshTimerRef.current);
       persistWorkspaceState(workspace);
+      containerRef.current?.removeEventListener('wheel', handleWheel, true);
+      containerRef.current?.removeEventListener(
+        'pointerdown',
+        handlePointerDown,
+        true
+      );
+      window.removeEventListener('pointermove', handlePointerMove, true);
+      window.removeEventListener('pointerup', handlePointerUp, true);
+      window.removeEventListener('pointercancel', handlePointerUp, true);
       resizeObserver.disconnect();
       workspace.removeChangeListener(refreshCode);
       workspace.dispose();
       blocklyWorkspaceRef.current = null;
+      if (import.meta.env.DEV) {
+        delete window.__COCOPI_BLOCKLY_WORKSPACE__;
+      }
     };
   }, [language]);
 
-  const handleReset = () => {
-    if (blocklyWorkspaceRef.current) loadStarterProgram(blocklyWorkspaceRef.current);
+  const handleClearWorkspace = () => {
+    const workspace = blocklyWorkspaceRef.current;
+    if (!workspace) return;
+    workspace.hideChaff();
+    workspace.clear();
+    workspace.clearUndo();
+    workspace.trashcan?.emptyContents();
+    emitWorkspaceCode(workspace);
+    setActiveCategory(-1);
+    requestAnimationFrame(() => resetWorkspaceView(workspace));
   };
 
   const handleCopy = () => {
@@ -256,11 +400,21 @@ export default function BlocklySection({
     setMode(nextMode);
     if (nextMode === 'ai') {
       blocklyWorkspaceRef.current?.getToolbox()?.clearSelection();
+      blocklyWorkspaceRef.current?.hideChaff();
     } else {
       requestAnimationFrame(() => {
         if (blocklyWorkspaceRef.current) Blockly.svgResize(blocklyWorkspaceRef.current);
       });
     }
+  };
+
+  const toggleTerminal = () => {
+    setTerminalCollapsed((collapsed) => !collapsed);
+    requestAnimationFrame(() => {
+      if (blocklyWorkspaceRef.current) {
+        Blockly.svgResize(blocklyWorkspaceRef.current);
+      }
+    });
   };
 
   const beginHorizontalResize = (side, event) => {
@@ -317,9 +471,10 @@ export default function BlocklySection({
     let nextHeight = consoleHeight;
     handle.classList.add('dragging');
     const onMove = (moveEvent) => {
+      const maxHeight = Math.min(260, Math.floor(window.innerHeight * 0.32));
       nextHeight = Math.max(
-        110,
-        Math.min(380, consoleHeight - (moveEvent.clientY - startY))
+        84,
+        Math.min(maxHeight, consoleHeight - (moveEvent.clientY - startY))
       );
       editorRef.current?.style.setProperty(
         '--blockly-console-height',
@@ -354,8 +509,25 @@ export default function BlocklySection({
     });
   };
 
+  const handleLoadSample = async (title, filename) => {
+    const workspace = blocklyWorkspaceRef.current;
+    if (!workspace) throw new Error('积木工作区尚未初始化');
+    const xmlText = await loadMaixcam2Sample(filename);
+    const dom = Blockly.utils.xml.textToDom(xmlText);
+    workspace.clear();
+    Blockly.Xml.domToWorkspace(dom, workspace);
+    const blockCount = workspace.getAllBlocks(false).length;
+    if (blockCount === 0) {
+      throw new Error(`样例「${title}」没有加载出任何积木`);
+    }
+    workspace.cleanUp();
+    emitWorkspaceCode(workspace);
+    requestAnimationFrame(() => resetWorkspaceView(workspace));
+    setMode('blocks');
+  };
+
   return (
-    <div id={id}>
+    <div id={id} className="h-full min-h-0 w-full">
       <div
         ref={workspaceGridRef}
         className="blockly-workspace-grid"
@@ -370,7 +542,14 @@ export default function BlocklySection({
               <span className="text-[14px] font-semibold text-ink">
                 {t('blockly.toolbox')}
               </span>
-              <StatusPill tone="accent">Blockly</StatusPill>
+              <button
+                type="button"
+                onClick={() => setShowExamples(true)}
+                className="inline-flex min-h-7 items-center gap-1 rounded-[6px] border border-line bg-surface px-2 text-[11px] font-semibold text-ink-soft hover:bg-surface-sunken"
+              >
+                <FolderOpen aria-hidden="true" className="h-3.5 w-3.5" />
+                {language === 'en' ? 'Examples' : '样例'}
+              </button>
             </div>
             <label className="mt-3 flex items-center gap-2 rounded-[var(--radius-control)] border border-line bg-surface-sunken px-2.5 py-2 text-ink-dim">
               <Search aria-hidden="true" className="h-3.5 w-3.5" />
@@ -414,43 +593,6 @@ export default function BlocklySection({
                 {t('blockly.noMatches')}
               </p>
             )}
-          </div>
-          <div className="border-t border-line p-3">
-            <p className="mb-2 text-[11px] font-semibold text-ink-dim">
-              {t('blockly.quickStart')}
-            </p>
-            <div className="mb-2 space-y-1">
-              {MAIXPY_PROGRAMS.map((program) => (
-                <button
-                  key={program.id}
-                  type="button"
-                  onClick={() => onSelectProgram(program)}
-                  className={cx(
-                    'flex min-h-8 w-full items-center gap-2 rounded-[6px] px-2 text-left text-[11px] font-medium',
-                    activeProgram?.id === program.id
-                      ? 'bg-accent-soft text-accent'
-                      : 'text-ink-soft hover:bg-surface-sunken'
-                  )}
-                >
-                  <span aria-hidden="true">◇</span>
-                  <span className="truncate">
-                    {t(`program.${program.id}.title`) ===
-                    `program.${program.id}.title`
-                      ? program.title.split('：')[1] || program.title
-                      : t(`program.${program.id}.title`)}
-                  </span>
-                </button>
-              ))}
-            </div>
-            <button
-              type="button"
-              onClick={handleReset}
-              disabled={isProgramBusy}
-              className={cx(buttonStyles.secondary, 'w-full justify-start')}
-            >
-              <RotateCcw aria-hidden="true" className="h-4 w-4" />
-              {t('blockly.resetStarter')}
-            </button>
           </div>
         </Panel>
 
@@ -511,7 +653,7 @@ export default function BlocklySection({
               </button>
               <button
                 type="button"
-                onClick={handleReset}
+                onClick={handleClearWorkspace}
                 disabled={isProgramBusy}
                 className="rounded-[6px] border border-line p-2 text-ink-soft hover:bg-surface-sunken"
                 aria-label={t('blockly.reset')}
@@ -628,16 +770,21 @@ export default function BlocklySection({
             )}
           </div>
 
-          <div
-            className="blockly-console-resizer"
-            onPointerDown={beginConsoleResize}
-            title={t('blockly.dragTerminal')}
-          />
+          {!terminalCollapsed && (
+            <div
+              className="blockly-console-resizer"
+              onPointerDown={beginConsoleResize}
+              title={t('blockly.dragTerminal')}
+            />
+          )}
           <div
             id="blockly-terminal"
-            className="blockly-console flex flex-col overflow-hidden border-t border-console-line bg-console"
+            className={cx(
+              'blockly-console flex flex-col overflow-hidden border-t border-console-line bg-console',
+              terminalCollapsed && 'is-collapsed'
+            )}
           >
-            <div className="flex items-center gap-4 border-b border-console-line bg-console-raised px-3 py-2">
+            <div className="flex items-center gap-3 border-b border-console-line bg-console-raised px-3 py-2">
               <span className="inline-flex items-center gap-1.5 text-[12px] font-semibold text-console-text">
                 <Terminal aria-hidden="true" className="h-4 w-4 text-console-accent" />
                 {t('blockly.terminal')}
@@ -647,69 +794,93 @@ export default function BlocklySection({
               </span>
               <button
                 type="button"
-                onClick={onClearLogs}
+                onClick={toggleTerminal}
+                aria-expanded={!terminalCollapsed}
+                title={
+                  terminalCollapsed
+                    ? t('blockly.expandTerminal')
+                    : t('blockly.collapseTerminal')
+                }
                 className="ml-auto inline-flex items-center gap-1 text-[11px] text-console-dim hover:text-console-text"
+              >
+                {terminalCollapsed ? (
+                  <ChevronUp aria-hidden="true" className="h-3.5 w-3.5" />
+                ) : (
+                  <ChevronDown aria-hidden="true" className="h-3.5 w-3.5" />
+                )}
+                {terminalCollapsed
+                  ? t('blockly.expandTerminal')
+                  : t('blockly.collapseTerminal')}
+              </button>
+              <button
+                type="button"
+                onClick={onClearLogs}
+                className="inline-flex items-center gap-1 text-[11px] text-console-dim hover:text-console-text"
               >
                 <Trash2 aria-hidden="true" className="h-3.5 w-3.5" />
                 {t('blockly.clear')}
               </button>
             </div>
-            <div
-              ref={terminalContainerRef}
-              className="console-scroll min-h-0 flex-1 overflow-y-auto bg-console-deep px-3 py-2 font-mono text-[11px] leading-relaxed"
-              role="log"
-              aria-live="polite"
-            >
-              {terminalLogs.length ? (
-                terminalLogs.map((log, index) => (
-                  <div key={index} className="break-all">
-                    <span className="mr-2 text-console-dim">[{log.time}]</span>
-                    <span className={LOG_TONE_CLASS[log.type] || LOG_TONE_CLASS.info}>
-                      {log.text}
-                    </span>
-                  </div>
-                ))
-              ) : (
-                <span className="text-console-dim">{t('blockly.noOutput')}</span>
-              )}
-            </div>
-            <div className="flex items-center gap-1 overflow-x-auto border-t border-console-line bg-console-raised px-3 py-1">
-              {QUICK_COMMANDS.map((quick) => (
-                <button
-                  key={quick.label}
-                  type="button"
-                  onClick={() => onQuickCommand(quick.cmd)}
-                  className="min-h-7 shrink-0 rounded-[6px] px-2 text-[11px] text-console-dim hover:bg-console hover:text-console-text"
+            {!terminalCollapsed && (
+              <>
+                <div
+                  ref={terminalContainerRef}
+                  className="console-scroll min-h-0 flex-1 overflow-y-auto bg-console-deep px-3 py-2 font-mono text-[11px] leading-relaxed"
+                  role="log"
+                  aria-live="polite"
                 >
-                    {t(quick.labelKey)}
-                </button>
-              ))}
-            </div>
-            <form
-              onSubmit={(event) => {
-                event.preventDefault();
-                onSendCommand();
-              }}
-              className="flex items-center gap-2 border-t border-console-line bg-console-raised px-3 py-2"
-            >
-              <span className="shrink-0 font-mono text-[11px] font-bold text-console-accent">
-                root@cocopi:{deviceCwd}#
-              </span>
-              <input
-                value={replInput}
-                onChange={(event) => onReplInputChange(event.target.value)}
-                placeholder={t('blockly.shellPlaceholder')}
-                aria-label={t('blockly.shellAria')}
-                className="min-w-0 flex-1 bg-transparent font-mono text-[11px] text-console-text outline-none placeholder:text-console-dim"
-              />
-              <button
-                type="submit"
-                aria-label={t('blockly.sendCommand')}
-                className="rounded-[5px] bg-accent p-1.5 text-white"
-              >
-                <Send aria-hidden="true" className="h-3.5 w-3.5" />
-              </button>
-            </form>
+                  {terminalLogs.length ? (
+                    terminalLogs.map((log, index) => (
+                      <div key={index} className="break-all">
+                        <span className="mr-2 text-console-dim">[{log.time}]</span>
+                        <span className={LOG_TONE_CLASS[log.type] || LOG_TONE_CLASS.info}>
+                          {log.text}
+                        </span>
+                      </div>
+                    ))
+                  ) : (
+                    <span className="text-console-dim">{t('blockly.noOutput')}</span>
+                  )}
+                </div>
+                <div className="flex items-center gap-1 overflow-x-auto border-t border-console-line bg-console-raised px-3 py-1">
+                  {QUICK_COMMANDS.map((quick) => (
+                    <button
+                      key={quick.labelKey}
+                      type="button"
+                      onClick={() => onQuickCommand(quick.cmd)}
+                      className="min-h-7 shrink-0 rounded-[6px] px-2 text-[11px] text-console-dim hover:bg-console hover:text-console-text"
+                    >
+                      {t(quick.labelKey)}
+                    </button>
+                  ))}
+                </div>
+                <form
+                  onSubmit={(event) => {
+                    event.preventDefault();
+                    onSendCommand();
+                  }}
+                  className="flex items-center gap-2 border-t border-console-line bg-console-raised px-3 py-2"
+                >
+                  <span className="shrink-0 font-mono text-[11px] font-bold text-console-accent">
+                    root@cocopi:{deviceCwd}#
+                  </span>
+                  <input
+                    value={replInput}
+                    onChange={(event) => onReplInputChange(event.target.value)}
+                    placeholder={t('blockly.shellPlaceholder')}
+                    aria-label={t('blockly.shellAria')}
+                    className="min-w-0 flex-1 bg-transparent font-mono text-[11px] text-console-text outline-none placeholder:text-console-dim"
+                  />
+                  <button
+                    type="submit"
+                    aria-label={t('blockly.sendCommand')}
+                    className="rounded-[5px] bg-accent p-1.5 text-white"
+                  >
+                    <Send aria-hidden="true" className="h-3.5 w-3.5" />
+                  </button>
+                </form>
+              </>
+            )}
           </div>
         </div>
 
@@ -803,7 +974,7 @@ export default function BlocklySection({
               spellCheck={false}
               aria-label={t('blockly.pythonSource')}
               aria-readonly={!codeEditable}
-              className="blockly-python-area console-scroll min-h-[520px] flex-1 resize-none bg-console-deep p-3 font-mono text-[11px] leading-relaxed text-console-text outline-none read-only:cursor-default"
+              className="blockly-python-area console-scroll min-h-0 flex-1 resize-none bg-console-deep p-3 font-mono text-[11px] leading-relaxed text-console-text outline-none read-only:cursor-default"
               placeholder={t('blockly.codePlaceholder')}
             />
             <div className="flex items-center justify-between border-t border-console-line bg-console-raised px-3 py-2 text-[11px] text-console-dim">
@@ -843,6 +1014,12 @@ export default function BlocklySection({
           </Panel>
         </div>
       </div>
+      <Maixcam2ExamplesModal
+        open={showExamples}
+        groups={sampleGroups}
+        onClose={() => setShowExamples(false)}
+        onSelect={handleLoadSample}
+      />
     </div>
   );
 }

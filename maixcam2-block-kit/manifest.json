@@ -1,0 +1,57 @@
+{
+  "name": "MaixCAM2 Block Kit",
+  "version": "1.0.0",
+  "maixpyVersion": "4.12.5",
+  "device": "MaixCAM2",
+  "blockFiles": [
+    "blocks/ai.js",
+    "blocks/esp32.js",
+    "blocks/maixcam2_screen.js",
+    "blocks/maixcam2_camera.js",
+    "blocks/maixcam2_audio.js",
+    "blocks/maixcam2_nn.js",
+    "blocks/maixcam2_io.js",
+    "blocks/maixcam2_imu.js",
+    "blocks/maixcam2_llm.js",
+    "blocks/maixcam2_llm4g.js",
+    "blocks/maixcam2_sd4g.js",
+    "blocks/maixcam2_speech.js"
+  ],
+  "runtimeFiles": [
+    "runtime/head.js",
+    "runtime/citys.js",
+    "runtime/define_colors.js",
+    "runtime/utility.js",
+    "runtime/python_utility.js",
+    "runtime/time.js",
+    "runtime/python_time.js",
+    "runtime/blocks_mpython.min.js",
+    "runtime/python_mpython.min.js"
+  ],
+  "toolboxCategories": [
+    "逻辑",
+    "循环",
+    "数学运算",
+    "变量",
+    "文字",
+    "列表",
+    "字典",
+    "元组",
+    "集合",
+    "函数",
+    "Python",
+    "时间",
+    "串口打印",
+    "MaixCAM2 设备",
+    "媒体处理",
+    "MaixCAM2 AI"
+  ],
+  "toolboxBlockTypeCount": 354,
+  "sampleRoot": "samples/pi2",
+  "sampleIndex": "samples/index.json",
+  "sampleCount": 52,
+  "requiredAssets": [
+    "public/maixcam2-block-kit/media/",
+    "public/maixcam2-block-kit/samples/"
+  ]
+}

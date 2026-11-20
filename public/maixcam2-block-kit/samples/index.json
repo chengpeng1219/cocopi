@@ -1,0 +1,262 @@
+{
+  "groups": [
+    {
+      "title": "屏幕",
+      "items": [
+        [
+          "绘制直线与圆形",
+          "pi2/screen/s1-line-circle.xml"
+        ],
+        [
+          "画布显示文字",
+          "pi2/screen/s2a-text.xml"
+        ],
+        [
+          "更换字体",
+          "pi2/screen/s2b-font.xml"
+        ],
+        [
+          "填满画布颜色",
+          "pi2/screen/s3a-fill.xml"
+        ],
+        [
+          "画布绘制图片",
+          "pi2/screen/s3b-image.xml"
+        ],
+        [
+          "多行文字自动换行",
+          "pi2/screen/s4-text-wrap.xml"
+        ],
+        [
+          "绘制矩形",
+          "pi2/screen/s5-rect-size.xml"
+        ],
+        [
+          "屏幕旋转 180 度",
+          "pi2/screen/s6a-rotate-180.xml"
+        ],
+        [
+          "屏幕旋转 90 度",
+          "pi2/screen/s6b-rotate-90.xml"
+        ],
+        [
+          "手指滑动卷动",
+          "pi2/screen/s7-touch-scroll.xml"
+        ],
+        [
+          "点击、长按与拖动",
+          "pi2/screen/s8-touch-gesture.xml"
+        ]
+      ]
+    },
+    {
+      "title": "相机",
+      "items": [
+        [
+          "相机初始化与拍照",
+          "pi2/camera/c1-camera.xml"
+        ],
+        [
+          "图传：画面传到电脑",
+          "pi2/camera/c2-graph-tx.xml"
+        ]
+      ]
+    },
+    {
+      "title": "麦克风",
+      "items": [
+        [
+          "录音存档并回放",
+          "pi2/mic/c3-mic-record.xml"
+        ],
+        [
+          "音量与频谱分析",
+          "pi2/mic/c4-mic-analysis.xml"
+        ]
+      ]
+    },
+    {
+      "title": "扬声器",
+      "items": [
+        [
+          "音量、播放与停止",
+          "pi2/speaker/c5-speaker.xml"
+        ]
+      ]
+    },
+    {
+      "title": "传感器",
+      "items": [
+        [
+          "倾斜角度与倾斜判断",
+          "pi2/sensor/ex-tilt.xml"
+        ],
+        [
+          "校准陀螺仪与角速度",
+          "pi2/sensor/ex-rate.xml"
+        ],
+        [
+          "航向角与按键归零",
+          "pi2/sensor/ex-heading.xml"
+        ]
+      ]
+    },
+    {
+      "title": "图像处理",
+      "items": [
+        [
+          "图像基础操作",
+          "pi2/image/m1-image-basics.xml"
+        ],
+        [
+          "二维码与条形码识别",
+          "pi2/image/m2-code-decoding.xml"
+        ],
+        [
+          "找色块与颜色分析",
+          "pi2/image/m3-blobs-color.xml"
+        ],
+        [
+          "循线",
+          "pi2/image/m4-lane-tracking.xml"
+        ]
+      ]
+    },
+    {
+      "title": "视频",
+      "items": [
+        [
+          "视频录制与播放",
+          "pi2/video/m5-video.xml"
+        ]
+      ]
+    },
+    {
+      "title": "AI 视觉",
+      "items": [
+        [
+          "常见物体检测",
+          "pi2/vision/a1-object-detect.xml"
+        ],
+        [
+          "人脸检测",
+          "pi2/vision/a2-face-detect.xml"
+        ],
+        [
+          "自定义模型检测",
+          "pi2/vision/a3-custom-detect.xml"
+        ],
+        [
+          "图像分类",
+          "pi2/vision/a4-classify.xml"
+        ],
+        [
+          "自我学习分类",
+          "pi2/vision/a5-self-learn.xml"
+        ],
+        [
+          "自我学习：学习与保存",
+          "pi2/vision/a5b-self-learn-save.xml"
+        ],
+        [
+          "自我学习：加载已学模型",
+          "pi2/vision/a5c-self-learn-load.xml"
+        ],
+        [
+          "人脸关键点（5 点）",
+          "pi2/vision/a6-face-keypoints.xml"
+        ],
+        [
+          "人脸多关键点（478 点）",
+          "pi2/vision/a7-face-landmarks.xml"
+        ],
+        [
+          "人脸识别",
+          "pi2/vision/a8-face-recognize.xml"
+        ],
+        [
+          "人体关键点（骨架）",
+          "pi2/vision/a9-body-pose.xml"
+        ],
+        [
+          "图像语义分割",
+          "pi2/vision/a10-segmentation.xml"
+        ],
+        [
+          "人脸表情情绪",
+          "pi2/vision/a11-face-emotion.xml"
+        ],
+        [
+          "手部关键点与手势识别",
+          "pi2/vision/a12-hand-gesture.xml"
+        ],
+        [
+          "旋转框检测（OBB）",
+          "pi2/vision/a13-obb.xml"
+        ],
+        [
+          "单目深度估计",
+          "pi2/vision/a14-depth.xml"
+        ],
+        [
+          "OCR 文字识别",
+          "pi2/vision/a15-ocr.xml"
+        ],
+        [
+          "人体姿态分类",
+          "pi2/vision/a16-pose-class.xml"
+        ],
+        [
+          "自学习跟踪",
+          "pi2/vision/a17-self-learn-track.xml"
+        ],
+        [
+          "轨迹跟踪与计数",
+          "pi2/vision/a18-track-count.xml"
+        ],
+        [
+          "YOLO-World 文字找物",
+          "pi2/vision/a19-yolo-world.xml"
+        ]
+      ]
+    },
+    {
+      "title": "AI 听觉",
+      "items": [
+        [
+          "关键词识别",
+          "pi2/hearing/h1-kws.xml"
+        ],
+        [
+          "连续中文数字识别",
+          "pi2/hearing/h2-digit.xml"
+        ],
+        [
+          "语音实时识别",
+          "pi2/hearing/h3-lvcsr.xml"
+        ]
+      ]
+    },
+    {
+      "title": "LLM 大模型",
+      "items": [
+        [
+          "SmolVLM 视觉语言模型",
+          "pi2/llm/l1-vlm.xml"
+        ],
+        [
+          "SenseVoice 语音识别",
+          "pi2/llm/l2-asr.xml"
+        ],
+        [
+          "MeloTTS 语音合成",
+          "pi2/llm/l3-tts.xml"
+        ],
+        [
+          "Whisper 语音识别",
+          "pi2/llm/l4-whisper.xml"
+        ]
+      ]
+    }
+  ]
+}

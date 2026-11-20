@@ -92,7 +92,6 @@ export default function App() {
   const [deviceCwd, setDeviceCwd] = useState('/root');
 
   // 编程沙盒与 AI 编程状态
-  const [activeProgram, setActiveProgram] = useState(MAIXPY_PROGRAMS[0]);
   const [editableCode, setEditableCode] = useState(MAIXPY_PROGRAMS[0].python);
   const [copiedCode, setCopiedCode] = useState(false);
   const [programState, setProgramState] = useState('idle');
@@ -876,7 +875,7 @@ export default function App() {
         .toISOString()
         .replace(/[-:]/g, '')
         .replace(/\.\d{3}Z$/, '');
-      const filename = `cocopi-${activeProgram?.id || 'program'}-${timestamp}.py`;
+      const filename = `cocopi-program-${timestamp}.py`;
       const blob = new Blob([editableCode], {
         type: 'text/x-python;charset=utf-8'
       });
@@ -981,9 +980,9 @@ export default function App() {
   };
 
   return (
-    <div className="min-h-screen bg-paper text-ink antialiased">
-      <header className="sticky top-0 z-40 border-b border-line/90 bg-surface/92 backdrop-blur-md">
-        <div className="mx-auto flex h-16 max-w-[1600px] items-center justify-between gap-4 px-4 sm:px-6">
+    <div className="flex h-[100dvh] min-h-0 flex-col overflow-hidden bg-paper text-ink antialiased">
+      <header className="z-40 shrink-0 border-b border-line/90 bg-surface/92 backdrop-blur-md">
+        <div className="mx-auto flex h-14 max-w-[1600px] items-center justify-between gap-4 px-4 sm:px-6">
           <div className="flex min-w-0 items-center gap-3">
             <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-[8px] bg-accent text-white shadow-[0_5px_14px_rgba(37,99,235,0.22)]">
               <Puzzle aria-hidden="true" className="h-[18px] w-[18px]" />
@@ -1010,7 +1009,7 @@ export default function App() {
                 className={cx(
                   'relative flex items-center gap-2 py-1 text-[13px] font-semibold transition-colors',
                   activeSection === nav.id
-                    ? 'text-ink after:absolute after:-bottom-[15px] after:left-0 after:right-0 after:h-[2px] after:bg-accent'
+                    ? 'text-ink after:absolute after:-bottom-[13px] after:left-0 after:right-0 after:h-[2px] after:bg-accent'
                     : 'text-ink-dim hover:text-ink'
                 )}
               >
@@ -1192,7 +1191,12 @@ export default function App() {
         )}
       </header>
 
-      <main className="mx-auto max-w-[1600px] space-y-6 px-4 py-5 sm:px-6 sm:py-6">
+      <main
+        className={cx(
+          'mx-auto flex min-h-0 w-full max-w-[1600px] flex-1 flex-col px-3 py-3 sm:px-4',
+          activeSection === 'blocks' ? 'overflow-hidden' : 'overflow-y-auto'
+        )}
+      >
         {activeSection === 'overview' && (
           <OverviewSection
             selectedPart={selectedPart}
@@ -1209,7 +1213,7 @@ export default function App() {
         {activeSection === 'blocks' && (
           <Suspense
             fallback={
-              <div className="flex min-h-[420px] items-center justify-center rounded-[var(--radius-box)] border border-line bg-surface text-[13px] text-ink-dim">
+              <div className="flex h-full min-h-0 w-full items-center justify-center rounded-[var(--radius-box)] border border-line bg-surface text-[13px] text-ink-dim">
                 {t('editor.loading')}
               </div>
             }
@@ -1230,11 +1234,6 @@ export default function App() {
               lastRunError={lastRunError}
               onAiRepair={handleAiRepairCode}
               onAiRepairAndRun={() => handleAiRepairCode(true)}
-              activeProgram={activeProgram}
-              onSelectProgram={(program) => {
-                setActiveProgram(program);
-                setEditableCode(program.python);
-              }}
               onRunCode={(code) => executeCodeOnDevice(code, 'user_latest_code.py')}
               onStop={handleStopDeviceProgram}
               onOpenDevice={() => setShowDeviceDrawer(true)}
@@ -1251,9 +1250,11 @@ export default function App() {
         )}
       </main>
 
-      <footer className="mx-auto max-w-[1600px] px-4 pb-8 pt-2 text-[12px] text-ink-dim sm:px-6">
-        {t('footer.connection')}
-      </footer>
+      {activeSection !== 'blocks' && (
+        <footer className="mx-auto max-w-[1600px] shrink-0 px-4 pb-3 pt-1 text-[12px] text-ink-dim sm:px-6">
+          {t('footer.connection')}
+        </footer>
+      )}
 
       <DeviceDrawer
         open={showDeviceDrawer}
