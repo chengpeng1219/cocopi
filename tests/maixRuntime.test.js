@@ -46,6 +46,10 @@ test('buildDeploymentScript enters development mode before starting code', () =>
   assert.match(script, /stop_launcher_daemon/);
   assert.match(script, /stop_user_programs/);
   assert.match(script, /stop_maixapp_apps/);
+  assert.match(script, /maixapp_resource_holders/);
+  assert.match(script, /'\/dev\/video'/);
+  assert.match(script, /'\/dev\/dri'/);
+  assert.match(script, /'\/dev\/snd'/);
   assert.match(script, /display_holder_processes/);
   assert.match(script, /release_display_resources/);
   assert.match(script, /stage': 'display_release/);

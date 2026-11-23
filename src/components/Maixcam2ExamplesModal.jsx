@@ -7,6 +7,10 @@ import {
   X
 } from 'lucide-react';
 import { useI18n } from '../lib/i18n.jsx';
+import {
+  translateSampleGroup,
+  translateSampleTitle
+} from '../data/sampleI18n.js';
 import { StatusPill, cx, inputStyles } from './ui.jsx';
 
 export default function Maixcam2ExamplesModal({
@@ -15,7 +19,7 @@ export default function Maixcam2ExamplesModal({
   onClose,
   onSelect
 }) {
-  const { language } = useI18n();
+  const { language, t } = useI18n();
   const closeRef = useRef(null);
   const [activeGroup, setActiveGroup] = useState(0);
   const [query, setQuery] = useState('');
@@ -37,16 +41,27 @@ export default function Maixcam2ExamplesModal({
 
   const visibleGroups = useMemo(() => {
     const keyword = query.trim().toLowerCase();
-    return groups.map((group, index) => ({
-      ...group,
-      index,
-      items: keyword
-        ? group.items.filter(([title, filename]) =>
-            `${title} ${filename}`.toLowerCase().includes(keyword)
-          )
-        : group.items
-    }));
-  }, [groups, query]);
+    return groups.map((group, index) => {
+      const title = translateSampleGroup(group.title, language);
+      const items = group.items.map(([itemTitle, filename]) => [
+        itemTitle,
+        filename,
+        translateSampleTitle(itemTitle, language)
+      ]);
+      return {
+        ...group,
+        title,
+        index,
+        items: keyword
+          ? items.filter(([itemTitle, filename, localizedTitle]) =>
+              `${itemTitle} ${localizedTitle} ${filename}`
+                .toLowerCase()
+                .includes(keyword)
+            )
+          : items
+      };
+    });
+  }, [groups, language, query]);
 
   if (!open) return null;
   const current =
@@ -87,17 +102,17 @@ export default function Maixcam2ExamplesModal({
               id="maixcam2-examples-title"
               className="text-[18px] font-semibold text-ink"
             >
-              MaixCAM2 样例
+              {t('samples.title')}
             </h2>
             <p className="mt-0.5 text-[12px] text-ink-dim">
-              选择样例后自动加载积木并关闭面板
+              {t('samples.hint')}
             </p>
           </div>
           <button
             ref={closeRef}
             type="button"
             onClick={onClose}
-            aria-label="关闭 MaixCAM2 样例"
+            aria-label={t('samples.close')}
             className="rounded-[6px] p-2 text-ink-dim hover:bg-surface-sunken hover:text-ink"
           >
             <X aria-hidden="true" className="h-4 w-4" />
@@ -111,8 +126,8 @@ export default function Maixcam2ExamplesModal({
               <input
                 value={query}
                 onChange={(event) => setQuery(event.target.value)}
-                placeholder="搜索样例"
-                aria-label="搜索 MaixCAM2 样例"
+                placeholder={t('samples.search')}
+                aria-label={t('samples.searchAria')}
                 className={cx(inputStyles, 'py-1.5 text-[13px]')}
               />
             </div>
@@ -150,14 +165,14 @@ export default function Maixcam2ExamplesModal({
             )}
             <div className="mb-3 flex items-center justify-between gap-3">
               <h3 className="text-[15px] font-semibold text-ink">
-                {current?.title || '样例'}
+                {current?.title || t('samples.title')}
               </h3>
               <StatusPill tone="accent">
-                {current?.items.length || 0} 个
+                {t('samples.count', { count: current?.items.length || 0 })}
               </StatusPill>
             </div>
             <div className="space-y-2">
-              {current?.items.map(([title, filename]) => (
+              {current?.items.map(([title, filename, localizedTitle]) => (
                 <button
                   key={filename}
                   type="button"
@@ -170,7 +185,9 @@ export default function Maixcam2ExamplesModal({
                   </span>
                   <span className="min-w-0 flex-1">
                     <span className="block truncate text-[13px] font-semibold text-ink">
-                      {loading === filename ? '正在加载...' : title}
+                      {loading === filename
+                        ? t('samples.loading')
+                        : localizedTitle}
                     </span>
                     <span className="mt-0.5 block truncate font-mono text-[10px] text-ink-dim">
                       samples/{filename}
@@ -184,7 +201,7 @@ export default function Maixcam2ExamplesModal({
               ))}
               {!current?.items.length && (
                 <p className="py-12 text-center text-[13px] text-ink-dim">
-                  没有匹配的样例
+                  {t('samples.noMatches')}
                 </p>
               )}
             </div>
@@ -193,7 +210,7 @@ export default function Maixcam2ExamplesModal({
 
         <footer className="flex items-center justify-between border-t border-line px-5 py-3 text-[11px] text-ink-dim">
           <span>MaixPy 4.12.5 · MaixCAM2</span>
-          <span>{language === 'en' ? 'Local examples' : '本地样例库'}</span>
+          <span>{t('samples.localLibrary')}</span>
         </footer>
       </section>
     </div>

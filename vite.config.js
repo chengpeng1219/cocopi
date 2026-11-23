@@ -50,8 +50,14 @@ export default defineConfig(({ mode }) => {
       chunkSizeWarningLimit: 900,
       rollupOptions: {
         output: {
-          manualChunks: {
-            three: ['three', 'three/examples/jsm/controls/OrbitControls.js']
+          manualChunks(id) {
+            if (id.includes('maixcam2-block-kit') || id.includes('maixcam2Kit')) {
+              return 'maixcam2-kit';
+            }
+            if (id.includes('/node_modules/blockly/')) return 'blockly';
+            if (id.includes('/node_modules/three/')) return 'three';
+            if (id.includes('/node_modules/@yume-chan/')) return 'webadb';
+            if (id.includes('/node_modules/react')) return 'react-vendor';
           }
         }
       }

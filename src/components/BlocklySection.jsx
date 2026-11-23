@@ -8,10 +8,12 @@ import {
   ChevronUp,
   Code2,
   Copy,
+  Download,
   FolderOpen,
   Loader2,
   Lock,
   Maximize2,
+  Minimize2,
   Pencil,
   Play,
   Redo2,
@@ -20,13 +22,13 @@ import {
   Send,
   ShieldCheck,
   Sparkles,
-  StopCircle,
   Terminal,
   Trash2,
   Undo2,
   Usb
 } from 'lucide-react';
 import {
+  applyMaixBlockLocale,
   MAIX_THEME,
   createStarterWorkspaceState,
 } from '../lib/maixBlocks.js';
@@ -40,6 +42,12 @@ import {
   loadMaixcam2Sample,
   scanMaixcam2ToolboxDefinitions
 } from '../lib/maixcam2Kit.js';
+import {
+  loadIndexedWorkspaceState,
+  readLocalWorkspaceState,
+  readWorkspaceStorageMode,
+  saveWorkspaceState
+} from '../lib/blocklyStorage.js';
 import Maixcam2ExamplesModal from './Maixcam2ExamplesModal.jsx';
 import {
   LOG_TONE_CLASS,
@@ -51,41 +59,9 @@ import {
   inputStyles
 } from './ui.jsx';
 
-const BLOCKLY_STORAGE_KEY = 'cocopi-blockly-workspace-v1';
 const DEFAULT_CONSOLE_HEIGHT = 190;
 const TRASH_FLYOUT_WIDTH = 300;
 const CATEGORY_SYMBOLS = ['◇', '▦', '↯', '⑂', '＋', 'T', '◎'];
-const QUICK_COMMANDS = [
-  {
-    labelKey: 'blockly.quickLog',
-    cmd: "cat /tmp/cocopi_run.log 2>/dev/null || echo '暂无日志'"
-  },
-  { labelKey: 'blockly.quickRoot', cmd: 'ls -la /root' },
-  {
-    labelKey: 'blockly.quickProcess',
-    cmd: 'ps w | grep python | grep -v grep || true'
-  }
-];
-
-function readSavedWorkspaceState() {
-  try {
-    const saved = localStorage.getItem(BLOCKLY_STORAGE_KEY);
-    return saved ? JSON.parse(saved) : null;
-  } catch (_) {
-    return null;
-  }
-}
-
-function persistWorkspaceState(workspace) {
-  try {
-    localStorage.setItem(
-      BLOCKLY_STORAGE_KEY,
-      JSON.stringify(Blockly.serialization.workspaces.save(workspace))
-    );
-  } catch (_) {
-    // Local persistence is optional and must not block editing.
-  }
-}
 
 function resetWorkspaceView(workspace) {
   if (!workspace) return;
@@ -93,6 +69,18 @@ function resetWorkspaceView(workspace) {
   const startScale = workspace.options?.zoomOptions?.startScale;
   if (Number.isFinite(startScale)) workspace.setScale(startScale);
   workspace.scrollCenter();
+}
+
+function downloadTextFile(content, filename, type) {
+  const blob = new Blob([content], { type });
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement('a');
+  anchor.href = url;
+  anchor.download = filename;
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 0);
 }
 
 function constrainTrashFlyout(workspace) {
@@ -124,7 +112,6 @@ export default function BlocklySection({
   connStatus,
   deviceInfo,
   isProgramBusy,
-  programState,
   aiPrompt,
   onAiPromptChange,
   onAiGenerate,
@@ -133,17 +120,16 @@ export default function BlocklySection({
   lastRunError,
   onAiRepair,
   onAiRepairAndRun,
-  onRunCode,
-  onStop,
   onOpenDevice,
   deviceCwd,
   terminalLogs = [],
   terminalContainerRef,
   onClearLogs,
-  onQuickCommand,
+  onExportLogs,
   replInput,
   onReplInputChange,
-  onSendCommand
+  onSendCommand,
+  workspaceApiRef
 }) {
   const { language, t } = useI18n();
   const categories = getMaixcam2CategoryList(language);
@@ -154,6 +140,7 @@ export default function BlocklySection({
   const blocklyWorkspaceRef = useRef(null);
   const copiedTimerRef = useRef(null);
   const refreshTimerRef = useRef(null);
+  const persistTimerRef = useRef(null);
   const onCodeChangeRef = useRef(onCodeChange);
 
   const [mode, setMode] = useState('blocks');
@@ -161,10 +148,11 @@ export default function BlocklySection({
   const [activeCategory, setActiveCategory] = useState(0);
   const [categoryQuery, setCategoryQuery] = useState('');
   const [copied, setCopied] = useState(false);
-  const [leftWidth, setLeftWidth] = useState(220);
   const [rightWidth, setRightWidth] = useState(390);
   const [consoleHeight, setConsoleHeight] = useState(DEFAULT_CONSOLE_HEIGHT);
-  const [terminalCollapsed, setTerminalCollapsed] = useState(false);
+  const [terminalCollapsed, setTerminalCollapsed] = useState(true);
+  const [codePanelCollapsed, setCodePanelCollapsed] = useState(false);
+  const [workspaceSaveError, setWorkspaceSaveError] = useState('');
   const [showExamples, setShowExamples] = useState(false);
 
   const connected = connStatus === 'connected';
@@ -178,10 +166,15 @@ export default function BlocklySection({
     onCodeChangeRef.current = onCodeChange;
   }, [onCodeChange]);
 
+  useEffect(() => {
+    if (!connected && mode === 'ai') {
+      setMode('blocks');
+    }
+  }, [connected, mode]);
+
   const emitWorkspaceCode = (workspace) => {
     const nextCode = generateMaixcam2Python(workspace);
     onCodeChangeRef.current?.(nextCode);
-    persistWorkspaceState(workspace);
   };
 
   const loadStarterProgram = (workspace) => {
@@ -198,6 +191,7 @@ export default function BlocklySection({
     if (!containerRef.current) return;
 
     initializeMaixcam2Kit(language);
+    applyMaixBlockLocale(language);
     const toolbox = getMaixcam2Toolbox(language);
     const definitionScan = scanMaixcam2ToolboxDefinitions();
     if (
@@ -244,9 +238,14 @@ export default function BlocklySection({
       window.__COCOPI_BLOCKLY_WORKSPACE__ = workspace;
     }
 
+    const localWorkspace = readLocalWorkspaceState();
+    const needsIndexedHydration =
+      readWorkspaceStorageMode() === 'indexeddb' || !localWorkspace;
+    let hydrationCancelled = false;
+    let canPersist = !needsIndexedHydration;
     try {
       Blockly.serialization.workspaces.load(
-        readSavedWorkspaceState() || createStarterWorkspaceState(language),
+        localWorkspace || createStarterWorkspaceState(language),
         workspace
       );
     } catch (_) {
@@ -255,8 +254,97 @@ export default function BlocklySection({
         workspace
       );
     }
+
+    if (workspaceApiRef) {
+      workspaceApiRef.current = {
+        getXml() {
+          const dom = Blockly.Xml.workspaceToDom(workspace);
+          return Blockly.Xml.domToText(dom);
+        },
+        importXml(xmlText) {
+          const dom = Blockly.utils.xml.textToDom(xmlText);
+          const validationWorkspace = new Blockly.Workspace();
+          let blockCount = 0;
+          try {
+            Blockly.Xml.domToWorkspace(dom, validationWorkspace);
+            blockCount = validationWorkspace.getAllBlocks(false).length;
+          } finally {
+            validationWorkspace.dispose();
+          }
+          if (blockCount === 0) {
+            throw new Error('XML 中没有可导入的积木');
+          }
+          const backup = Blockly.serialization.workspaces.save(workspace);
+          workspace.hideChaff();
+          workspace.clear();
+          try {
+            Blockly.Xml.domToWorkspace(dom, workspace);
+          } catch (error) {
+            workspace.clear();
+            Blockly.serialization.workspaces.load(backup, workspace);
+            throw error;
+          }
+          workspace.clearUndo();
+          workspace.trashcan?.emptyContents();
+          workspace.cleanUp();
+          emitWorkspaceCode(workspace);
+          setMode('blocks');
+          setActiveCategory(-1);
+          requestAnimationFrame(() => resetWorkspaceView(workspace));
+          return blockCount;
+        }
+      };
+    }
+
     emitWorkspaceCode(workspace);
     requestAnimationFrame(() => resetWorkspaceView(workspace));
+
+    if (needsIndexedHydration) {
+      loadIndexedWorkspaceState()
+        .then((savedState) => {
+          if (hydrationCancelled) return;
+          if (savedState) {
+            workspace.clear();
+            Blockly.serialization.workspaces.load(savedState, workspace);
+            emitWorkspaceCode(workspace);
+            requestAnimationFrame(() => resetWorkspaceView(workspace));
+          }
+        })
+        .catch((error) => {
+          if (!hydrationCancelled) {
+            setWorkspaceSaveError(error?.message || '草稿恢复失败');
+          }
+        })
+        .finally(() => {
+          if (hydrationCancelled) return;
+          canPersist = true;
+        });
+    }
+
+    const persistWorkspace = async (showError = true) => {
+      const result = await saveWorkspaceState(
+        Blockly.serialization.workspaces.save(workspace)
+      );
+      if (hydrationCancelled) return;
+      if (!result.ok && showError) {
+        setWorkspaceSaveError(result.error?.message || '保存失败');
+      } else if (result.ok) {
+        setWorkspaceSaveError('');
+      }
+    };
+    const schedulePersist = () => {
+      if (persistTimerRef.current) clearTimeout(persistTimerRef.current);
+      persistTimerRef.current = setTimeout(() => {
+        persistTimerRef.current = null;
+        persistWorkspace();
+      }, 800);
+    };
+    const flushPersist = () => {
+      if (!canPersist) return;
+      if (persistTimerRef.current) clearTimeout(persistTimerRef.current);
+      persistTimerRef.current = null;
+      persistWorkspace(false);
+    };
 
     const refreshCode = (event) => {
       if (event?.isUiEvent) return;
@@ -267,6 +355,9 @@ export default function BlocklySection({
       if (!shouldRefresh) return;
       if (refreshTimerRef.current) clearTimeout(refreshTimerRef.current);
       refreshTimerRef.current = setTimeout(() => emitWorkspaceCode(workspace), 120);
+      if (canPersist) {
+        schedulePersist();
+      }
     };
     workspace.addChangeListener(refreshCode);
 
@@ -325,8 +416,8 @@ export default function BlocklySection({
     const handlePointerMove = (event) => {
       if (!panState || event.pointerId !== panState.pointerId) return;
       workspace.scroll(
-        panState.scrollX - (event.clientX - panState.clientX),
-        panState.scrollY - (event.clientY - panState.clientY)
+        panState.scrollX + (event.clientX - panState.clientX),
+        panState.scrollY + (event.clientY - panState.clientY)
       );
       event.preventDefault();
       event.stopPropagation();
@@ -343,11 +434,15 @@ export default function BlocklySection({
     window.addEventListener('pointermove', handlePointerMove, true);
     window.addEventListener('pointerup', handlePointerUp, true);
     window.addEventListener('pointercancel', handlePointerUp, true);
+    window.addEventListener('pagehide', flushPersist);
 
     return () => {
+      hydrationCancelled = true;
       if (copiedTimerRef.current) clearTimeout(copiedTimerRef.current);
       if (refreshTimerRef.current) clearTimeout(refreshTimerRef.current);
-      persistWorkspaceState(workspace);
+      if (persistTimerRef.current) clearTimeout(persistTimerRef.current);
+      persistTimerRef.current = null;
+      if (canPersist) persistWorkspace(false);
       containerRef.current?.removeEventListener('wheel', handleWheel, true);
       containerRef.current?.removeEventListener(
         'pointerdown',
@@ -357,10 +452,12 @@ export default function BlocklySection({
       window.removeEventListener('pointermove', handlePointerMove, true);
       window.removeEventListener('pointerup', handlePointerUp, true);
       window.removeEventListener('pointercancel', handlePointerUp, true);
+      window.removeEventListener('pagehide', flushPersist);
       resizeObserver.disconnect();
       workspace.removeChangeListener(refreshCode);
       workspace.dispose();
       blocklyWorkspaceRef.current = null;
+      if (workspaceApiRef?.current) workspaceApiRef.current = null;
       if (import.meta.env.DEV) {
         delete window.__COCOPI_BLOCKLY_WORKSPACE__;
       }
@@ -390,6 +487,41 @@ export default function BlocklySection({
       .catch(() => {});
   };
 
+  const projectFilename = (extension) => {
+    const timestamp = new Date()
+      .toISOString()
+      .replace(/[-:]/g, '')
+      .replace(/\.\d{3}Z$/, '');
+    return `cocopi-program-${timestamp}.${extension}`;
+  };
+
+  const handleDownloadXml = () => {
+    try {
+      const xml = workspaceApiRef?.current?.getXml();
+      if (!xml) throw new Error('积木工作区尚未就绪');
+      downloadTextFile(
+        xml,
+        projectFilename('xml'),
+        'application/xml;charset=utf-8'
+      );
+    } catch (error) {
+      setWorkspaceSaveError(error.message || 'XML 下载失败');
+    }
+  };
+
+  const handleDownloadPython = () => {
+    try {
+      localStorage.setItem('cocopi-portal-saved-code', code || '');
+      downloadTextFile(
+        code || '',
+        projectFilename('py'),
+        'text/x-python;charset=utf-8'
+      );
+    } catch (error) {
+      setWorkspaceSaveError(error.message || 'Python 下载失败');
+    }
+  };
+
   const handleCategoryClick = (index) => {
     setMode('blocks');
     setActiveCategory(index);
@@ -397,6 +529,7 @@ export default function BlocklySection({
   };
 
   const handleModeChange = (nextMode) => {
+    if (nextMode === 'ai' && !connected) return;
     setMode(nextMode);
     if (nextMode === 'ai') {
       blocklyWorkspaceRef.current?.getToolbox()?.clearSelection();
@@ -417,47 +550,42 @@ export default function BlocklySection({
     });
   };
 
-  const beginHorizontalResize = (side, event) => {
+  const toggleCodePanel = () => {
+    setCodePanelCollapsed((collapsed) => !collapsed);
+    requestAnimationFrame(() => {
+      if (blocklyWorkspaceRef.current) {
+        Blockly.svgResize(blocklyWorkspaceRef.current);
+      }
+    });
+  };
+
+  const beginRightResize = (event) => {
     if (window.innerWidth < 1280) return;
     event.preventDefault();
     const handle = event.currentTarget;
     const grid = workspaceGridRef.current;
     const startRect = grid.getBoundingClientRect();
-    const startLeft = leftWidth;
     const startRight = rightWidth;
-    let nextValue = side === 'left' ? startLeft : startRight;
+    let nextValue = startRight;
     handle.classList.add('dragging');
 
     const onMove = (moveEvent) => {
       const minCenter = 480;
-      if (side === 'left') {
-        const maxLeft = Math.max(
-          180,
-          startRect.width - startRight - minCenter - 16
-        );
-        nextValue = Math.max(
-          180,
-          Math.min(maxLeft, moveEvent.clientX - startRect.left)
-        );
-        grid.style.setProperty('--blockly-left-width', `${nextValue}px`);
-      } else {
-        const maxRight = Math.max(
-          280,
-          startRect.width - startLeft - minCenter - 16
-        );
-        nextValue = Math.max(
-          280,
-          Math.min(maxRight, startRect.right - moveEvent.clientX)
-        );
-        grid.style.setProperty('--blockly-right-width', `${nextValue}px`);
-      }
+      const maxRight = Math.max(
+        280,
+        startRect.width - 150 - minCenter - 32
+      );
+      nextValue = Math.max(
+        280,
+        Math.min(maxRight, startRect.right - moveEvent.clientX)
+      );
+      grid.style.setProperty('--blockly-right-width', `${nextValue}px`);
     };
     const onUp = () => {
       handle.classList.remove('dragging');
       window.removeEventListener('pointermove', onMove);
       window.removeEventListener('pointerup', onUp);
-      if (side === 'left') setLeftWidth(nextValue);
-      else setRightWidth(nextValue);
+      setRightWidth(nextValue);
     };
     window.addEventListener('pointermove', onMove);
     window.addEventListener('pointerup', onUp, { once: true });
@@ -530,25 +658,28 @@ export default function BlocklySection({
     <div id={id} className="h-full min-h-0 w-full">
       <div
         ref={workspaceGridRef}
-        className="blockly-workspace-grid"
+        className={cx(
+          'blockly-workspace-grid',
+          codePanelCollapsed && 'is-code-collapsed'
+        )}
         style={{
-          '--blockly-left-width': `${leftWidth}px`,
           '--blockly-right-width': `${rightWidth}px`
         }}
       >
         <Panel className="blockly-left-order flex min-h-0 flex-col !p-0">
-          <div className="border-b border-line px-3.5 py-3">
-            <div className="flex items-center justify-between gap-2">
-              <span className="text-[14px] font-semibold text-ink">
+          <div className="border-b border-line px-2 py-2.5">
+            <div className="flex items-center justify-between gap-1.5">
+              <span className="whitespace-nowrap text-[12px] font-semibold text-ink">
                 {t('blockly.toolbox')}
               </span>
               <button
                 type="button"
                 onClick={() => setShowExamples(true)}
-                className="inline-flex min-h-7 items-center gap-1 rounded-[6px] border border-line bg-surface px-2 text-[11px] font-semibold text-ink-soft hover:bg-surface-sunken"
+                title={language === 'en' ? 'Examples' : '样例'}
+                aria-label={language === 'en' ? 'Examples' : '样例'}
+                className="inline-flex min-h-7 shrink-0 items-center gap-1 whitespace-nowrap rounded-[6px] border border-line bg-surface px-1.5 text-[10px] font-semibold text-ink-soft hover:bg-surface-sunken"
               >
-                <FolderOpen aria-hidden="true" className="h-3.5 w-3.5" />
-                {language === 'en' ? 'Examples' : '样例'}
+                <FolderOpen aria-hidden="true" className="h-3 w-3" />
               </button>
             </div>
             <label className="mt-3 flex items-center gap-2 rounded-[var(--radius-control)] border border-line bg-surface-sunken px-2.5 py-2 text-ink-dim">
@@ -568,6 +699,7 @@ export default function BlocklySection({
                 key={category.name}
                 type="button"
                 onClick={() => handleCategoryClick(category.index)}
+                title={category.name}
                 className={cx(
                   'flex min-h-9 w-full items-center gap-2.5 rounded-[7px] px-2.5 text-left text-[12px] font-semibold transition-colors',
                   activeCategory === category.index && mode === 'blocks'
@@ -597,12 +729,6 @@ export default function BlocklySection({
         </Panel>
 
         <div
-          className="blockly-resize-handle"
-          onPointerDown={(event) => beginHorizontalResize('left', event)}
-          title={t('blockly.dragLeft')}
-        />
-
-        <div
           ref={editorRef}
           className="blockly-editor-card blockly-editor-order overflow-hidden rounded-[var(--radius-box)] border border-line bg-surface"
           style={{ '--blockly-console-height': `${consoleHeight}px` }}
@@ -624,17 +750,37 @@ export default function BlocklySection({
             <button
               type="button"
               onClick={() => handleModeChange('ai')}
+              disabled={!connected}
+              title={!connected ? t('blockly.aiNeedsConnection') : undefined}
               className={cx(
                 'relative inline-flex min-h-12 items-center gap-2 text-[13px] font-bold transition-colors',
                 mode === 'ai'
                   ? 'text-accent after:absolute after:inset-x-0 after:bottom-0 after:h-0.5 after:bg-accent'
-                  : 'text-ink-dim hover:text-ink'
+                  : 'text-ink-dim hover:text-ink',
+                !connected && 'cursor-not-allowed opacity-45 hover:text-ink-dim'
               )}
             >
               <Sparkles aria-hidden="true" className="h-4 w-4" />
               {t('blockly.modeAi')}
             </button>
             <div className="ml-auto flex items-center gap-1">
+              {workspaceSaveError && (
+                <span
+                  className="mr-1 text-[11px] font-medium text-danger"
+                  title={workspaceSaveError}
+                >
+                  {t('blockly.saveFailed')}
+                </span>
+              )}
+              <button
+                type="button"
+                onClick={handleDownloadXml}
+                className="rounded-[6px] border border-line p-2 text-ink-soft hover:bg-surface-sunken"
+                aria-label={t('blockly.downloadXml')}
+                title={t('blockly.downloadXml')}
+              >
+                <Download aria-hidden="true" className="h-4 w-4" />
+              </button>
               <button
                 type="button"
                 onClick={() => blocklyWorkspaceRef.current?.undo(false)}
@@ -662,11 +808,24 @@ export default function BlocklySection({
               </button>
               <button
                 type="button"
-                onClick={() => workspaceGridRef.current?.requestFullscreen?.()}
+                onClick={toggleCodePanel}
                 className="rounded-[6px] border border-line p-2 text-ink-soft hover:bg-surface-sunken"
-                aria-label={t('blockly.fullscreen')}
+                aria-label={
+                  codePanelCollapsed
+                    ? t('blockly.showCode')
+                    : t('blockly.hideCode')
+                }
+                title={
+                  codePanelCollapsed
+                    ? t('blockly.showCode')
+                    : t('blockly.hideCode')
+                }
               >
-                <Maximize2 aria-hidden="true" className="h-4 w-4" />
+                {codePanelCollapsed ? (
+                  <Minimize2 aria-hidden="true" className="h-4 w-4" />
+                ) : (
+                  <Maximize2 aria-hidden="true" className="h-4 w-4" />
+                )}
               </button>
             </div>
           </div>
@@ -719,7 +878,7 @@ export default function BlocklySection({
                           <button
                             type="button"
                             onClick={() => onAiRepair(false)}
-                            disabled={isGeneratingAi || isProgramBusy}
+                            disabled={isGeneratingAi || isProgramBusy || !connected}
                             className={buttonStyles.dangerSoft}
                           >
                             {t('blockly.aiRepair')}
@@ -743,7 +902,7 @@ export default function BlocklySection({
                         <button
                           type="button"
                           onClick={() => onAiGenerate(false)}
-                          disabled={isGeneratingAi}
+                          disabled={isGeneratingAi || !connected}
                           className={buttonStyles.primary}
                         >
                           {isGeneratingAi ? (
@@ -814,6 +973,14 @@ export default function BlocklySection({
               </button>
               <button
                 type="button"
+                onClick={onExportLogs}
+                className="inline-flex items-center gap-1 text-[11px] text-console-dim hover:text-console-text"
+              >
+                <Download aria-hidden="true" className="h-3.5 w-3.5" />
+                {t('blockly.exportLogs')}
+              </button>
+              <button
+                type="button"
                 onClick={onClearLogs}
                 className="inline-flex items-center gap-1 text-[11px] text-console-dim hover:text-console-text"
               >
@@ -841,18 +1008,6 @@ export default function BlocklySection({
                   ) : (
                     <span className="text-console-dim">{t('blockly.noOutput')}</span>
                   )}
-                </div>
-                <div className="flex items-center gap-1 overflow-x-auto border-t border-console-line bg-console-raised px-3 py-1">
-                  {QUICK_COMMANDS.map((quick) => (
-                    <button
-                      key={quick.labelKey}
-                      type="button"
-                      onClick={() => onQuickCommand(quick.cmd)}
-                      className="min-h-7 shrink-0 rounded-[6px] px-2 text-[11px] text-console-dim hover:bg-console hover:text-console-text"
-                    >
-                      {t(quick.labelKey)}
-                    </button>
-                  ))}
                 </div>
                 <form
                   onSubmit={(event) => {
@@ -885,8 +1040,8 @@ export default function BlocklySection({
         </div>
 
         <div
-          className="blockly-resize-handle"
-          onPointerDown={(event) => beginHorizontalResize('right', event)}
+          className="blockly-resize-handle blockly-right-resize-handle"
+          onPointerDown={beginRightResize}
           title={t('blockly.dragRight')}
         />
 
@@ -897,74 +1052,56 @@ export default function BlocklySection({
                 <Code2 aria-hidden="true" className="h-4 w-4 text-console-accent" />
                 {t('blockly.pythonSource')}
               </span>
-              <button
-                type="button"
-                onClick={() => setCodeEditable((value) => !value)}
-                aria-pressed={codeEditable}
-                className="inline-flex items-center gap-2 text-[11px] font-semibold text-console-dim"
-              >
-                {codeEditable ? (
-                  <Pencil aria-hidden="true" className="h-3.5 w-3.5" />
-                ) : (
-                  <Lock aria-hidden="true" className="h-3.5 w-3.5" />
-                )}
-                {codeEditable ? t('blockly.editable') : t('blockly.readOnly')}
-                <span
-                  className={cx(
-                    'relative h-4 w-8 rounded-full transition-colors',
-                    codeEditable ? 'bg-accent' : 'bg-console-line'
-                  )}
+              <div className="flex items-center gap-1">
+                <button
+                  type="button"
+                  onClick={handleDownloadPython}
+                  aria-label={t('blockly.downloadPython')}
+                  title={t('blockly.downloadPython')}
+                  className="rounded-[5px] p-1.5 text-console-dim hover:bg-console hover:text-console-text"
                 >
+                  <Download aria-hidden="true" className="h-3.5 w-3.5" />
+                </button>
+                <button
+                  type="button"
+                  onClick={handleCopy}
+                  aria-label={copied ? t('blockly.copied') : t('blockly.copy')}
+                  title={copied ? t('blockly.copied') : t('blockly.copy')}
+                  className="rounded-[5px] p-1.5 text-console-dim hover:bg-console hover:text-console-text"
+                >
+                  {copied ? (
+                    <Check aria-hidden="true" className="h-3.5 w-3.5" />
+                  ) : (
+                    <Copy aria-hidden="true" className="h-3.5 w-3.5" />
+                  )}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setCodeEditable((value) => !value)}
+                  aria-pressed={codeEditable}
+                  className="inline-flex items-center gap-2 text-[11px] font-semibold text-console-dim"
+                >
+                  {codeEditable ? (
+                    <Pencil aria-hidden="true" className="h-3.5 w-3.5" />
+                  ) : (
+                    <Lock aria-hidden="true" className="h-3.5 w-3.5" />
+                  )}
+                  {codeEditable ? t('blockly.editable') : t('blockly.readOnly')}
                   <span
                     className={cx(
-                      'absolute top-0.5 h-3 w-3 rounded-full bg-white transition-transform',
-                      codeEditable ? 'translate-x-[18px]' : 'translate-x-0.5'
+                      'relative h-4 w-8 rounded-full transition-colors',
+                      codeEditable ? 'bg-accent' : 'bg-console-line'
                     )}
-                  />
-                </span>
-              </button>
-            </div>
-            <div className="flex items-center gap-2 border-b border-console-line bg-console px-3 py-1.5">
-              <span className="font-mono text-[11px] text-console-dim">main.py · Python 3</span>
-              <button
-                type="button"
-                onClick={handleCopy}
-                className="ml-auto inline-flex items-center gap-1 text-[11px] text-console-dim hover:text-console-text"
-              >
-                {copied ? (
-                  <Check aria-hidden="true" className="h-3.5 w-3.5" />
-                ) : (
-                  <Copy aria-hidden="true" className="h-3.5 w-3.5" />
-                )}
-                {copied ? t('blockly.copied') : t('blockly.copy')}
-              </button>
-              <button
-                type="button"
-                onClick={() => onRunCode(code)}
-                disabled={!connected || isProgramBusy || !(code || '').trim()}
-                className={cx(
-                  buttonStyles.base,
-                  'min-h-7 border border-ok bg-ok px-2 text-white hover:bg-ok-strong'
-                )}
-              >
-                <Play aria-hidden="true" className="h-3.5 w-3.5 fill-current" />
-                {programState === 'deploying'
-                  ? t('blockly.running')
-                  : t('actions.run')}
-              </button>
-              <button
-                type="button"
-                onClick={onStop}
-                disabled={
-                  !connected ||
-                  programState === 'deploying' ||
-                  programState === 'stopping'
-                }
-                className={cx(buttonStyles.onDark, 'min-h-7 px-2')}
-              >
-                <StopCircle aria-hidden="true" className="h-3.5 w-3.5" />
-                {t('blockly.stop')}
-              </button>
+                  >
+                    <span
+                      className={cx(
+                        'absolute top-0.5 h-3 w-3 rounded-full bg-white transition-transform',
+                        codeEditable ? 'translate-x-[18px]' : 'translate-x-0.5'
+                      )}
+                    />
+                  </span>
+                </button>
+              </div>
             </div>
             <textarea
               value={code || ''}
@@ -977,10 +1114,6 @@ export default function BlocklySection({
               className="blockly-python-area console-scroll min-h-0 flex-1 resize-none bg-console-deep p-3 font-mono text-[11px] leading-relaxed text-console-text outline-none read-only:cursor-default"
               placeholder={t('blockly.codePlaceholder')}
             />
-            <div className="flex items-center justify-between border-t border-console-line bg-console-raised px-3 py-2 text-[11px] text-console-dim">
-              <span>Blockly Python Generator</span>
-              <span>{t('blockly.synced')} ›</span>
-            </div>
           </div>
 
           <Panel className="space-y-3">

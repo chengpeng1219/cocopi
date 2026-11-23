@@ -4,39 +4,41 @@ import {
   Monitor,
   MousePointer2,
   Play,
-  Rotate3d,
   Sparkles,
   ZoomIn,
   ZoomOut,
   RotateCcw
 } from 'lucide-react';
-import { Section } from './ui.jsx';
 import { useI18n } from '../lib/i18n.jsx';
+import {
+  getHardwareLabels,
+  localizeHardwarePart
+} from '../data/hardwarePartsI18n.js';
 
 const CocoPiReal3DViewer = lazy(() => import('./HardwareViewer.jsx'));
 
 const PART_CARDS = [
-  { id: 'screen', label: '正视图：屏幕与扬声器' },
-  { id: 'camera_back', label: '背视图：摄像头 & P0-P3' },
-  { id: 'power_switch_left', label: '左视图：电源开关 & M3-M6' },
-  { id: 'right_io', label: '右视图：扩展开关/电池/TypeC' },
-  { id: 'top_sleep_ports', label: '俯视图：返回(休眠)按钮' },
-  { id: 'bottom_ports', label: '底视图：M1/M2/UART/IIC' }
+  { id: 'screen' },
+  { id: 'camera_back' },
+  { id: 'power_switch_left' },
+  { id: 'right_io' },
+  { id: 'top_sleep_ports' },
+  { id: 'bottom_ports' }
 ];
 
 const VIEW_BUTTONS = [
-  { label: '正视图', pos: [0, 0, 6.2], part: 'screen' },
-  { label: '背视图', pos: [0, 0, -6.2], part: 'camera_back' },
-  { label: '左视图', pos: [-6.0, 0, 0], part: 'power_switch_left' },
-  { label: '右视图', pos: [6.0, 0, 0], part: 'right_io' },
-  { label: '俯视图', pos: [0, 5.8, 0.01], part: 'top_sleep_ports' },
-  { label: '底视图', pos: [0, -5.8, 0.01], part: 'bottom_ports' }
+  { key: 'front', pos: [0, 0, 6.2], part: 'screen' },
+  { key: 'back', pos: [0, 0, -6.2], part: 'camera_back' },
+  { key: 'left', pos: [-6.0, 0, 0], part: 'power_switch_left' },
+  { key: 'right', pos: [6.0, 0, 0], part: 'right_io' },
+  { key: 'top', pos: [0, 5.8, 0.01], part: 'top_sleep_ports' },
+  { key: 'bottom', pos: [0, -5.8, 0.01], part: 'bottom_ports' }
 ];
 
 const FEATURES = [
-  { icon: Box, title: '真实三维', detail: '完整硬件外观' },
-  { icon: MousePointer2, title: '即点即用', detail: '快速定位部件' },
-  { icon: Monitor, title: '多视角', detail: '六视图自由切换' }
+  { icon: Box, key: 'real3d' },
+  { icon: MousePointer2, key: 'click' },
+  { icon: Monitor, key: 'views' }
 ];
 
 export default function OverviewSection({
@@ -47,72 +49,72 @@ export default function OverviewSection({
   zoomTrigger,
   onZoom,
   onResetView,
-  resetTrigger
+  resetTrigger,
+  onStart
 }) {
-  const { t } = useI18n();
+  const { language, t } = useI18n();
+  const labels = getHardwareLabels(language);
+  const localizedPart = localizeHardwarePart(selectedPart, language);
   return (
-    <Section
+    <section
       id="overview"
-      index="01"
-      title={t('overview.title')}
-      summary={t('overview.summary')}
-      aside={
-        <span className="inline-flex items-center gap-1.5 rounded-full border border-accent-line bg-surface px-3 py-1 text-[12px] font-medium text-accent">
-          <Rotate3d aria-hidden="true" className="h-4 w-4" />
-          {t('overview.badge')}
-        </span>
-      }
-      className="overflow-hidden border-accent-line !bg-accent-soft"
+      aria-label={t('overview.title')}
+      className="flex h-full min-h-0 flex-col overflow-y-auto rounded-[var(--radius-box)] border border-accent-line bg-accent-soft p-4 lg:overflow-hidden"
     >
-      <div className="grid grid-cols-1 gap-8 lg:grid-cols-12 lg:items-center">
-        <div className="space-y-6 lg:col-span-5">
-          <div className="space-y-3">
+      <div className="grid min-h-0 flex-1 grid-cols-1 gap-5 lg:grid-cols-12 lg:items-stretch">
+        <div className="flex min-h-0 flex-col justify-center gap-3 lg:col-span-5 xl:gap-4">
+          <div className="space-y-2">
             <span className="inline-flex items-center gap-1.5 rounded-full border border-accent-line bg-surface px-3 py-1 text-[12px] font-semibold text-accent">
               <Sparkles aria-hidden="true" className="h-3.5 w-3.5" />
               {t('overview.eyebrow')}
             </span>
-            <h1 className="max-w-xl text-[34px] font-bold leading-[1.15] tracking-tight text-ink sm:text-[40px]">
+            <h1 className="max-w-xl text-[28px] font-bold leading-[1.15] tracking-tight text-ink sm:text-[34px] xl:text-[38px]">
               {t('overview.headline1')}
               <span className="block text-accent">{t('overview.headline2')}</span>
             </h1>
-            <p className="max-w-xl text-[14px] leading-7 text-ink-soft">
+            <p className="max-w-xl text-[13px] leading-6 text-ink-soft">
               {t('overview.copy')}
             </p>
           </div>
 
           <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
-            {FEATURES.map(({ icon: Icon, title, detail }) => (
-              <div key={title} className="flex items-center gap-2.5 rounded-[var(--radius-control)] bg-white/70 px-3 py-2.5">
+            {FEATURES.map(({ icon: Icon, key }) => (
+              <div key={key} className="flex items-center gap-2.5 rounded-[var(--radius-control)] bg-white/70 px-3 py-2.5">
                 <Icon aria-hidden="true" className="h-4 w-4 shrink-0 text-accent" />
                 <span className="min-w-0">
-                  <span className="block text-[12px] font-semibold text-ink">{title}</span>
-                  <span className="block truncate text-[11px] text-ink-dim">{detail}</span>
+                  <span className="block text-[12px] font-semibold text-ink">
+                    {labels.features[key][0]}
+                  </span>
+                  <span className="block truncate text-[11px] text-ink-dim">
+                    {labels.features[key][1]}
+                  </span>
                 </span>
               </div>
             ))}
           </div>
 
           <div className="flex flex-wrap items-center gap-2.5">
-            <a
-              href="#connect"
+            <button
+              type="button"
+              onClick={onStart}
               className="inline-flex min-h-10 items-center justify-center gap-2 rounded-[var(--radius-control)] bg-accent px-5 text-[14px] font-semibold text-white shadow-[0_8px_18px_rgba(37,99,235,0.22)] transition-colors hover:bg-accent-strong"
             >
               <Play aria-hidden="true" className="h-4 w-4 fill-current" />
               {t('overview.start')}
-            </a>
+            </button>
             <span className="text-[12px] text-ink-dim">{t('overview.startHint')}</span>
           </div>
 
-          <div className="border-l-2 border-accent pl-4">
+          <div className="border-l-2 border-accent pl-3">
             <div className="flex flex-wrap items-center gap-2">
-              <span className="text-[12px] font-semibold text-accent">{selectedPart.badge}</span>
+              <span className="text-[12px] font-semibold text-accent">{localizedPart.badge}</span>
               <span className="text-[11px] text-ink-dim">{t('overview.selected')}</span>
             </div>
-            <h3 className="mt-1 text-[16px] font-semibold text-ink">{selectedPart.name}</h3>
-            <p className="mt-1.5 break-all font-mono text-[12px] leading-relaxed text-ink-soft">
-              {selectedPart.spec}
+            <h3 className="mt-1 text-[15px] font-semibold text-ink">{localizedPart.name}</h3>
+            <p className="mt-1 break-all font-mono text-[11px] leading-relaxed text-ink-soft">
+              {localizedPart.spec}
             </p>
-            <p className="mt-1.5 text-[13px] leading-relaxed text-ink-soft">{selectedPart.desc}</p>
+            <p className="mt-1 text-[12px] leading-relaxed text-ink-soft">{localizedPart.desc}</p>
           </div>
 
           <div className="grid grid-cols-1 gap-1.5 sm:grid-cols-2">
@@ -130,18 +132,18 @@ export default function OverviewSection({
                       : 'text-ink-soft hover:bg-white/70 hover:text-ink'
                   }`}
                 >
-                  <span className="truncate">{card.label}</span>
+                  <span className="truncate">{labels.cards[card.id]}</span>
                 </button>
               );
             })}
           </div>
         </div>
 
-        <div className="lg:col-span-7">
-          <div className="relative">
+        <div className="flex min-h-0 flex-col gap-3 lg:col-span-7">
+          <div className="relative min-h-[320px] flex-1">
             <Suspense
               fallback={
-                <div className="flex h-[360px] w-full items-center justify-center rounded-[var(--radius-box)] border border-accent-line bg-surface text-[13px] font-medium text-ink-dim lg:h-[460px]">
+                <div className="flex h-full min-h-[320px] w-full items-center justify-center rounded-[var(--radius-box)] border border-accent-line bg-surface text-[13px] font-medium text-ink-dim">
                   {t('overview.loading')}
                 </div>
               }
@@ -160,16 +162,16 @@ export default function OverviewSection({
             </p>
           </div>
 
-          <div className="mt-3 flex flex-wrap items-center justify-between gap-2 rounded-[var(--radius-box)] border border-accent-line bg-surface p-1.5 shadow-[0_2px_8px_rgba(37,71,135,0.05)]">
+          <div className="flex shrink-0 flex-wrap items-center justify-between gap-2 rounded-[var(--radius-box)] border border-accent-line bg-surface p-1.5 shadow-[0_2px_8px_rgba(37,71,135,0.05)]">
             <div className="flex flex-wrap items-center gap-1">
               {VIEW_BUTTONS.map((view) => (
                 <button
-                  key={view.label}
+                  key={view.key}
                   type="button"
                   onClick={() => onFocusPart(view.part, view.pos)}
                   className="min-h-8 rounded-[6px] px-2.5 text-[12px] font-medium text-ink-soft transition-colors hover:bg-accent-soft hover:text-accent"
                 >
-                  {view.label}
+                  {labels.views[view.key]}
                 </button>
               ))}
             </div>
@@ -179,8 +181,8 @@ export default function OverviewSection({
                 type="button"
                 onClick={() => onZoom('in')}
                 className="rounded-[6px] p-2 text-ink-soft transition-colors hover:bg-accent-soft hover:text-accent"
-                title="放大模型"
-                aria-label="放大模型"
+                title={t('overview.zoomIn')}
+                aria-label={t('overview.zoomIn')}
               >
                 <ZoomIn aria-hidden="true" className="h-4 w-4" />
               </button>
@@ -188,8 +190,8 @@ export default function OverviewSection({
                 type="button"
                 onClick={() => onZoom('out')}
                 className="rounded-[6px] p-2 text-ink-soft transition-colors hover:bg-accent-soft hover:text-accent"
-                title="缩小模型"
-                aria-label="缩小模型"
+                title={t('overview.zoomOut')}
+                aria-label={t('overview.zoomOut')}
               >
                 <ZoomOut aria-hidden="true" className="h-4 w-4" />
               </button>
@@ -197,8 +199,8 @@ export default function OverviewSection({
                 type="button"
                 onClick={onResetView}
                 className="rounded-[6px] p-2 text-ink-soft transition-colors hover:bg-accent-soft hover:text-accent"
-                title="复位视角"
-                aria-label="复位视角"
+                title={t('overview.resetView')}
+                aria-label={t('overview.resetView')}
               >
                 <RotateCcw aria-hidden="true" className="h-4 w-4" />
               </button>
@@ -206,6 +208,6 @@ export default function OverviewSection({
           </div>
         </div>
       </div>
-    </Section>
+    </section>
   );
 }

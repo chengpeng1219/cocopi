@@ -386,7 +386,7 @@ def stop_user_programs():
 
 
 def stop_maixapp_apps():
-    processes = maixapp_processes()
+    processes = maixapp_resource_holders()
     for pid, _ in processes:
         try:
             os.kill(pid, 15)
@@ -396,7 +396,7 @@ def stop_maixapp_apps():
     if processes:
         time.sleep(0.5)
 
-    for pid, _ in maixapp_processes():
+    for pid, _ in maixapp_resource_holders():
         try:
             os.kill(pid, 9)
         except OSError:
@@ -404,7 +404,36 @@ def stop_maixapp_apps():
 
     if processes:
         time.sleep(0.2)
-    return maixapp_processes()
+    return maixapp_resource_holders()
+
+
+def maixapp_resource_holders():
+    holder_pids = {
+        pid for pid, _ in display_holder_processes()
+    }
+    for pid, _ in maixapp_processes():
+        if pid_holds_devices(pid, ('/dev/snd', '/dev/input/event')):
+            holder_pids.add(pid)
+    return [
+        (pid, command)
+        for pid, command in maixapp_processes()
+        if pid in holder_pids
+    ]
+
+
+def pid_holds_devices(pid, prefixes):
+    fd_dir = '/proc/' + str(pid) + '/fd'
+    try:
+        for fd_name in os.listdir(fd_dir):
+            try:
+                target = os.readlink(fd_dir + '/' + fd_name)
+                if any(target.startswith(prefix) for prefix in prefixes):
+                    return True
+            except OSError:
+                continue
+    except OSError:
+        return False
+    return False
 
 
 def display_holder_processes():
@@ -424,20 +453,10 @@ def display_holder_processes():
             ).decode('utf-8', errors='replace').strip()[:240]
             if 'ws_agent.py' in command:
                 continue
-            holds_display = False
-            for fd_name in os.listdir(fd_dir):
-                try:
-                    target = os.readlink(fd_dir + '/' + fd_name)
-                    if (
-                        target.startswith('/dev/fb')
-                        or target.startswith('/dev/vo')
-                        or target.startswith('/dev/vb')
-                        or target.startswith('/dev/video')
-                    ):
-                        holds_display = True
-                        break
-                except OSError:
-                    continue
+            holds_display = pid_holds_devices(
+                pid,
+                ('/dev/fb', '/dev/vo', '/dev/vb', '/dev/video', '/dev/dri')
+            )
             if holds_display:
                 holders.append((pid, command or 'unknown'))
         except OSError:

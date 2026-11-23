@@ -21,12 +21,6 @@ export default function DeviceDrawer({
   onAdbConnect,
   sshIpInput,
   onSshIpChange,
-  sshPortInput,
-  onSshPortChange,
-  sshUserInput,
-  onSshUserChange,
-  sshPasswordInput,
-  onSshPasswordChange,
   sshError,
   onSshConnect,
   onOpenQrModal,
@@ -144,41 +138,12 @@ export default function DeviceDrawer({
               </>
             ) : (
               <>
-                <div className="grid grid-cols-3 gap-2">
-                  <Field label={t('drawer.ip')} className="col-span-2">
-                    <input
-                      value={sshIpInput}
-                      onChange={(event) => onSshIpChange(event.target.value)}
-                      disabled={connStatus === 'connected'}
-                      className={cx(inputStyles, 'font-mono text-[13px]')}
-                    />
-                  </Field>
-                  <Field label={t('drawer.port')}>
-                    <input
-                      value={sshPortInput}
-                      onChange={(event) => onSshPortChange(event.target.value)}
-                      disabled={connStatus === 'connected'}
-                      className={cx(inputStyles, 'font-mono text-[13px]')}
-                    />
-                  </Field>
-                </div>
-                <Field label={t('drawer.username')}>
+                <Field label={t('drawer.ip')}>
                   <input
-                    value={sshUserInput}
-                    onChange={(event) => onSshUserChange(event.target.value)}
+                    value={sshIpInput}
+                    onChange={(event) => onSshIpChange(event.target.value)}
                     disabled={connStatus === 'connected'}
-                    autoComplete="username"
-                    className={cx(inputStyles, 'font-mono text-[13px]')}
-                  />
-                </Field>
-                <Field label={t('drawer.password')}>
-                  <input
-                    type="password"
-                    value={sshPasswordInput}
-                    onChange={(event) => onSshPasswordChange(event.target.value)}
-                    disabled={connStatus === 'connected'}
-                    autoComplete="current-password"
-                    placeholder={t('drawer.passwordHint')}
+                    inputMode="decimal"
                     className={cx(inputStyles, 'font-mono text-[13px]')}
                   />
                 </Field>

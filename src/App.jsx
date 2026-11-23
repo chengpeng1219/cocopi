@@ -1,13 +1,13 @@
 import { lazy, Suspense, useState, useEffect, useRef, useMemo } from 'react';
 import {
   Box,
+  FileUp,
   Languages,
   Menu,
-  Plus,
   Play,
   Puzzle,
   RotateCw,
-  Save,
+  StopCircle,
   Upload,
   X
 } from 'lucide-react';
@@ -24,6 +24,11 @@ import {
 import { requestMaixPyCode } from './lib/aiClient.js';
 import { validateMaixPyCode, summarizeDeviceOutput } from './lib/maixpyValidator.js';
 import {
+  downloadDebugLogs,
+  recordDebugLog,
+  startDebugSession
+} from './lib/debugLog.js';
+import {
   parseDeploymentResult,
   parseStopResult,
   buildNativeShellCommand,
@@ -36,23 +41,29 @@ import { generateLocalMaixPyFallback } from './data/maixpy.js';
 import OverviewSection from './components/OverviewSection.jsx';
 import QrModal from './components/QrModal.jsx';
 import DeviceDrawer from './components/DeviceDrawer.jsx';
+import AppErrorBoundary from './components/AppErrorBoundary.jsx';
 import { useI18n } from './lib/i18n.jsx';
 import { buttonStyles, cx } from './components/ui.jsx';
+import packageInfo from '../package.json';
 
 const APP_SECTIONS = [
-  { id: 'blocks', labelKey: 'nav.blocks', icon: Puzzle },
-  { id: 'overview', labelKey: 'nav.overview', icon: Box }
+  { id: 'overview', labelKey: 'nav.overview', icon: Box },
+  { id: 'blocks', labelKey: 'nav.blocks', icon: Puzzle }
 ];
+const MAX_IMPORT_FILE_BYTES = 4 * 1024 * 1024;
+const APP_VERSION = packageInfo.version;
 const IMPORTANT_PLATFORM_INFO_PATTERN =
   /失败|错误|超时|断开|恢复|取消|不可用|未连接|停止|重试|重连|握手/i;
 const BlocklySection = lazy(() => import('./components/BlocklySection.jsx'));
+
+startDebugSession({ version: APP_VERSION });
 
 // ==========================================
 // 主应用组件：只负责状态与业务编排，界面拆分在 components/ 下
 // ==========================================
 export default function App() {
   const { language, setLanguage, t } = useI18n();
-  const [activeSection, setActiveSection] = useState('blocks');
+  const [activeSection, setActiveSection] = useState('overview');
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [showDeviceDrawer, setShowDeviceDrawer] = useState(false);
 
@@ -73,9 +84,6 @@ export default function App() {
   });
 
   const [sshIpInput, setSshIpInput] = useState('192.168.0.64');
-  const [sshPortInput, setSshPortInput] = useState('22');
-  const [sshUserInput, setSshUserInput] = useState('root');
-  const [sshPasswordInput, setSshPasswordInput] = useState('');
   const [sshError, setSshError] = useState('');
   const [showQrModal, setShowQrModal] = useState(false);
   const [qrSsid, setQrSsid] = useState('SmartLab_5G');
@@ -111,6 +119,8 @@ export default function App() {
   const sshClientRef = useRef(null);
   const terminalContainerRef = useRef(null);
   const timersRef = useRef([]);
+  const blocklyWorkspaceApiRef = useRef(null);
+  const importFileRef = useRef(null);
   const deploymentTimeoutRef = useRef(null);
   const stopTimeoutRef = useRef(null);
   const deploymentSettledRef = useRef(false);
@@ -167,6 +177,9 @@ export default function App() {
     const keepShell = type === 'shell';
 
     for (const rawLine of rawLines) {
+      if (rawLine.trim()) {
+        recordDebugLog(rawLine, type);
+      }
       const line = truncateLine(rawLine.trim());
       if (!line) continue;
       if (type === 'debug') continue;
@@ -183,6 +196,16 @@ export default function App() {
         : [{ time: timeStr, type: keepShell ? 'device' : type, text: line }];
 
       setTerminalLogs((prev) => entries.reduce(appendTerminalEntry, prev));
+    }
+  };
+
+  const handleExportLogs = () => {
+    recordDebugLog('[调试日志] 请求导出完整调试日志', 'system');
+    const filename = downloadDebugLogs({ version: APP_VERSION });
+    if (filename) {
+      appendLog(`[调试日志] 已导出 ${filename}`, 'success');
+    } else {
+      appendLog('[调试日志] 当前环境无法导出日志', 'error');
     }
   };
 
@@ -285,8 +308,9 @@ export default function App() {
   const handleSshConnect = async () => {
     setSshError('');
     const host = sshIpInput.trim();
-    const port = Number(sshPortInput);
-    const username = sshUserInput.trim();
+    const port = 22;
+    const username = 'root';
+    const password = 'sipeed';
     const ipv4Regex =
       /^(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)(\.(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)){3}$/;
 
@@ -294,15 +318,6 @@ export default function App() {
       setSshError('请输入设备局域网 IPv4 地址');
       return;
     }
-    if (!Number.isInteger(port) || port < 1 || port > 65535) {
-      setSshError('SSH 端口需为 1 ~ 65535 之间的整数');
-      return;
-    }
-    if (!username) {
-      setSshError('请输入 SSH 用户名');
-      return;
-    }
-
     clearAllTimers();
     if (adbClientRef.current) {
       await adbClientRef.current.close();
@@ -320,7 +335,7 @@ export default function App() {
         host,
         port,
         username,
-        password: sshPasswordInput
+        password
       });
       setConnStatus('connected');
       setConnType('ssh-real');
@@ -333,7 +348,6 @@ export default function App() {
         sshPort: String(port),
         portName: `SSH (${host}:${port})`
       });
-      setSshPasswordInput('');
       appendLog(
         `[SSH] 已通过 ${host}:${port} 连接设备${info.name ? `: ${info.name}` : ''}`,
         'success'
@@ -524,7 +538,9 @@ export default function App() {
     appendLog('[操作] 正在停止用户程序并恢复 CocoPi 桌面...', 'debug');
 
     if (connType === 'usb-webusb' && adbClientRef.current) {
-      const output = await adbClientRef.current.stopRunningPrograms(runningPidRef.current);
+      const output = await adbClientRef.current.stopRunningPrograms(
+        runningPidRef.current
+      );
       if (!handleStopResult(output)) {
         setProgramState('error');
         appendLog('[停止失败] 设备未返回停止结果，请查看终端日志。', 'error');
@@ -563,6 +579,10 @@ export default function App() {
     }
 
     clearAllTimers();
+
+    if (connType === 'usb-webusb' && adbClientRef.current) {
+      await adbClientRef.current.scheduleUsbGadgetRebind();
+    }
 
     if (adbClientRef.current) {
       await adbClientRef.current.close();
@@ -745,6 +765,10 @@ export default function App() {
   // 7. AI 编程助手：按您的参考代码结构生成 MaixPy v4 程序
   // ==========================================
   const handleAiGenerateCode = async (autoRunAfterGen = false) => {
+    if (connStatus !== 'connected') {
+      appendLog('[AI 编程] 请先连接设备后再使用 AI 编程。', 'error');
+      return;
+    }
     const prompt = aiPrompt.trim();
     if (!prompt) {
       appendLog('[AI 编程] 请先输入您的自然语言编程指令！', 'error');
@@ -798,6 +822,10 @@ export default function App() {
   };
 
   const handleAiRepairCode = async (autoRun = false) => {
+    if (connStatus !== 'connected') {
+      appendLog('[AI 修复] 请先连接设备后再使用 AI 修复。', 'error');
+      return;
+    }
     if (isProgramBusy) {
       appendLog('[AI 修复] 设备正在部署或停止，请等待操作完成。', 'error');
       return;
@@ -868,28 +896,43 @@ export default function App() {
       });
   };
 
-  const handleSaveToLocal = () => {
+  const handleImportProject = async (event) => {
+    const file = event.target.files?.[0];
+    event.target.value = '';
+    if (!file) return;
+
     try {
-      localStorage.setItem('cocopi-portal-saved-code', editableCode);
-      const timestamp = new Date()
-        .toISOString()
-        .replace(/[-:]/g, '')
-        .replace(/\.\d{3}Z$/, '');
-      const filename = `cocopi-program-${timestamp}.py`;
-      const blob = new Blob([editableCode], {
-        type: 'text/x-python;charset=utf-8'
-      });
-      const url = URL.createObjectURL(blob);
-      const anchor = document.createElement('a');
-      anchor.href = url;
-      anchor.download = filename;
-      document.body.appendChild(anchor);
-      anchor.click();
-      anchor.remove();
-      URL.revokeObjectURL(url);
-      appendLog(t('save.localSuccess'), 'success');
+      if (file.size > MAX_IMPORT_FILE_BYTES) {
+        throw new Error(t('import.tooLarge'));
+      }
+      const text = await file.text();
+      const extension = file.name.split('.').pop()?.toLowerCase();
+      if (extension === 'xml') {
+        const blockCount =
+          blocklyWorkspaceApiRef.current?.importXml(text) || 0;
+        appendLog(
+          t('import.xmlSuccess', {
+            filename: file.name,
+            count: blockCount
+          }),
+          'success'
+        );
+        return;
+      }
+      if (extension === 'py') {
+        setEditableCode(text);
+        appendLog(t('import.pySuccess', { filename: file.name }), 'success');
+        return;
+      }
+      throw new Error(t('import.unsupported'));
     } catch (error) {
-      appendLog(`${t('save.failed')} ${error.message}`, 'error');
+      appendLog(
+        t('import.failed', {
+          filename: file.name,
+          error: error.message
+        }),
+        'error'
+      );
     }
   };
 
@@ -982,7 +1025,7 @@ export default function App() {
   return (
     <div className="flex h-[100dvh] min-h-0 flex-col overflow-hidden bg-paper text-ink antialiased">
       <header className="z-40 shrink-0 border-b border-line/90 bg-surface/92 backdrop-blur-md">
-        <div className="mx-auto flex h-14 max-w-[1600px] items-center justify-between gap-4 px-4 sm:px-6">
+        <div className="mx-auto flex h-14 max-w-[1600px] items-center justify-between gap-4 px-[10px]">
           <div className="flex min-w-0 items-center gap-3">
             <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-[8px] bg-accent text-white shadow-[0_5px_14px_rgba(37,99,235,0.22)]">
               <Puzzle aria-hidden="true" className="h-[18px] w-[18px]" />
@@ -990,8 +1033,8 @@ export default function App() {
             <div className="min-w-0">
               <div className="flex items-baseline gap-2">
                 <span className="text-[16px] font-bold tracking-tight text-ink">CocoBlockly</span>
-                <span className="hidden text-[12px] text-ink-dim sm:inline">
-                  COCOPI MODULE
+                <span className="rounded-[4px] bg-surface-sunken px-1.5 py-0.5 font-mono text-[10px] font-semibold text-ink-dim">
+                  v{APP_VERSION}
                 </span>
               </div>
             </div>
@@ -1023,36 +1066,13 @@ export default function App() {
           <div className="flex items-center gap-1.5">
             <button
               type="button"
-              onClick={() => setShowDeviceDrawer(true)}
-              title={
-                connStatus === 'connected'
-                  ? deviceInfo.portName
-                  : t('device.add')
-              }
-              className="flex min-h-9 items-center gap-2 rounded-[var(--radius-control)] border border-line bg-surface px-3 text-[12px] font-semibold text-ink-soft hover:bg-surface-sunken"
+              onClick={() => importFileRef.current?.click()}
+              disabled={activeSection !== 'blocks'}
+              title={t('actions.import')}
+              className="hidden min-h-9 items-center gap-1.5 rounded-[var(--radius-control)] border border-line bg-surface px-2.5 text-[12px] font-semibold text-ink-soft hover:bg-surface-sunken disabled:cursor-not-allowed disabled:opacity-45 sm:inline-flex sm:px-3"
             >
-              <Plus aria-hidden="true" className="h-4 w-4" />
-              <span className="hidden xl:inline">{t('device.add')}</span>
-              <span
-                aria-hidden="true"
-                className={cx(
-                  'h-1.5 w-1.5 shrink-0 rounded-full',
-                  connStatus === 'connected'
-                    ? 'bg-ok'
-                    : connStatus === 'connecting'
-                    ? 'bg-warn'
-                    : 'bg-line-strong'
-                )}
-              />
-            </button>
-            <button
-              type="button"
-              onClick={handleSaveToLocal}
-              title={t('actions.save')}
-              className="hidden min-h-9 items-center gap-1.5 rounded-[var(--radius-control)] border border-line bg-surface px-2.5 text-[12px] font-semibold text-ink-soft hover:bg-surface-sunken sm:inline-flex sm:px-3"
-            >
-              <Save aria-hidden="true" className="h-4 w-4" />
-              <span className="hidden xl:inline">{t('actions.save')}</span>
+              <FileUp aria-hidden="true" className="h-4 w-4" />
+              <span className="hidden xl:inline">{t('actions.import')}</span>
             </button>
             <button
               type="button"
@@ -1078,6 +1098,16 @@ export default function App() {
             </button>
             <button
               type="button"
+              onClick={handleStopDeviceProgram}
+              disabled={connStatus !== 'connected' || isProgramBusy}
+              title={t('blockly.stop')}
+              className="hidden min-h-9 items-center gap-1.5 rounded-[var(--radius-control)] border border-danger-line bg-danger-soft px-2.5 text-[12px] font-semibold text-danger hover:bg-danger-hover disabled:cursor-not-allowed disabled:opacity-45 md:inline-flex md:px-3"
+            >
+              <StopCircle aria-hidden="true" className="h-4 w-4" />
+              <span className="hidden xl:inline">{t('blockly.stop')}</span>
+            </button>
+            <button
+              type="button"
               onClick={handleRestartDevice}
               disabled={connStatus !== 'connected' || isProgramBusy}
               title={t('actions.restart')}
@@ -1100,16 +1130,13 @@ export default function App() {
                 value={language}
                 onChange={(event) => setLanguage(event.target.value)}
                 aria-label={t('language.label')}
-                className="w-[82px] cursor-pointer bg-transparent text-[12px] font-semibold text-ink-soft outline-none sm:w-auto sm:max-w-[130px]"
+                className="w-[74px] cursor-pointer bg-transparent text-[12px] font-semibold text-ink-soft outline-none sm:w-auto sm:max-w-[110px]"
               >
                 <option value="zh-hans">{t('language.zhHans')}</option>
                 <option value="zh-hant">{t('language.zhHant')}</option>
                 <option value="en">{t('language.en')}</option>
               </select>
             </label>
-            <span className="hidden h-9 w-9 items-center justify-center rounded-full bg-warn-soft text-[12px] font-bold text-warn lg:inline-flex">
-              C
-            </span>
             <button
               type="button"
               onClick={() => setMobileNavOpen((open) => !open)}
@@ -1150,11 +1177,12 @@ export default function App() {
             <div className="mt-2 grid grid-cols-2 gap-2 border-t border-line pt-3">
               <button
                 type="button"
-                onClick={handleSaveToLocal}
+                onClick={() => importFileRef.current?.click()}
+                disabled={activeSection !== 'blocks'}
                 className={buttonStyles.secondary}
               >
-                <Save aria-hidden="true" className="h-4 w-4" />
-                {t('actions.save')}
+                <FileUp aria-hidden="true" className="h-4 w-4" />
+                {t('actions.import')}
               </button>
               <button
                 type="button"
@@ -1191,41 +1219,52 @@ export default function App() {
         )}
       </header>
 
+      <input
+        ref={importFileRef}
+        type="file"
+        accept=".xml,.py,text/xml,text/x-python"
+        onChange={handleImportProject}
+        className="hidden"
+      />
+
       <main
         className={cx(
-          'mx-auto flex min-h-0 w-full max-w-[1600px] flex-1 flex-col px-3 py-3 sm:px-4',
+          'mx-auto flex min-h-0 w-full max-w-[1600px] flex-1 flex-col p-[10px]',
           activeSection === 'blocks' ? 'overflow-hidden' : 'overflow-y-auto'
         )}
       >
         {activeSection === 'overview' && (
-          <OverviewSection
-            selectedPart={selectedPart}
-            onSelectPart={setSelectedPart}
-            targetCamPos={targetCamPos}
-            onFocusPart={focusPart}
-            zoomTrigger={zoomTrigger}
-            onZoom={(type) => setZoomTrigger({ type, ts: Date.now() })}
-            onResetView={() => setResetTrigger((n) => n + 1)}
-            resetTrigger={resetTrigger}
-          />
+          <AppErrorBoundary resetKey={`overview-${language}`}>
+            <OverviewSection
+              selectedPart={selectedPart}
+              onSelectPart={setSelectedPart}
+              targetCamPos={targetCamPos}
+              onFocusPart={focusPart}
+              zoomTrigger={zoomTrigger}
+              onZoom={(type) => setZoomTrigger({ type, ts: Date.now() })}
+              onResetView={() => setResetTrigger((n) => n + 1)}
+              resetTrigger={resetTrigger}
+              onStart={() => navigateToSection('blocks')}
+            />
+          </AppErrorBoundary>
         )}
 
         {activeSection === 'blocks' && (
-          <Suspense
-            fallback={
-              <div className="flex h-full min-h-0 w-full items-center justify-center rounded-[var(--radius-box)] border border-line bg-surface text-[13px] text-ink-dim">
-                {t('editor.loading')}
-              </div>
-            }
-          >
-            <BlocklySection
+          <AppErrorBoundary resetKey={`blocks-${language}`}>
+            <Suspense
+              fallback={
+                <div className="flex h-full min-h-0 w-full items-center justify-center rounded-[var(--radius-box)] border border-line bg-surface text-[13px] text-ink-dim">
+                  {t('editor.loading')}
+                </div>
+              }
+            >
+              <BlocklySection
               id="blocks-panel"
               code={editableCode}
               onCodeChange={setEditableCode}
               connStatus={connStatus}
               deviceInfo={deviceInfo}
               isProgramBusy={isProgramBusy}
-              programState={programState}
               aiPrompt={aiPrompt}
               onAiPromptChange={setAiPrompt}
               onAiGenerate={handleAiGenerateCode}
@@ -1234,27 +1273,21 @@ export default function App() {
               lastRunError={lastRunError}
               onAiRepair={handleAiRepairCode}
               onAiRepairAndRun={() => handleAiRepairCode(true)}
-              onRunCode={(code) => executeCodeOnDevice(code, 'user_latest_code.py')}
-              onStop={handleStopDeviceProgram}
               onOpenDevice={() => setShowDeviceDrawer(true)}
               deviceCwd={deviceCwd}
               terminalLogs={terminalLogs}
               terminalContainerRef={terminalContainerRef}
               onClearLogs={() => setTerminalLogs([])}
-              onQuickCommand={handleSendCommand}
+              onExportLogs={handleExportLogs}
               replInput={replInput}
               onReplInputChange={setReplInput}
               onSendCommand={handleSendCommand}
-            />
-          </Suspense>
+              workspaceApiRef={blocklyWorkspaceApiRef}
+              />
+            </Suspense>
+          </AppErrorBoundary>
         )}
       </main>
-
-      {activeSection !== 'blocks' && (
-        <footer className="mx-auto max-w-[1600px] shrink-0 px-4 pb-3 pt-1 text-[12px] text-ink-dim sm:px-6">
-          {t('footer.connection')}
-        </footer>
-      )}
 
       <DeviceDrawer
         open={showDeviceDrawer}
@@ -1267,12 +1300,6 @@ export default function App() {
         onAdbConnect={handleAdbWiredConnect}
         sshIpInput={sshIpInput}
         onSshIpChange={setSshIpInput}
-        sshPortInput={sshPortInput}
-        onSshPortChange={setSshPortInput}
-        sshUserInput={sshUserInput}
-        onSshUserChange={setSshUserInput}
-        sshPasswordInput={sshPasswordInput}
-        onSshPasswordChange={setSshPasswordInput}
         sshError={sshError}
         onSshConnect={handleSshConnect}
         onOpenQrModal={() => {

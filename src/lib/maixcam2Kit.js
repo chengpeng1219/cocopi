@@ -195,9 +195,9 @@ const TOOLBOX_LABELS = {
     Time: '时间',
     时间: '时间',
     串口打印: '串口打印',
-    'MaixCAM2 设备': 'MaixCAM2 设备',
+    'MaixCAM2 设备': '基础硬件',
     媒体处理: '媒体处理',
-    'MaixCAM2 AI': 'MaixCAM2 AI'
+    'MaixCAM2 AI': '人工智能'
   },
   'zh-hant': {
     Logic: '邏輯',
@@ -224,9 +224,9 @@ const TOOLBOX_LABELS = {
     Time: '時間',
     时间: '時間',
     串口打印: '串口列印',
-    'MaixCAM2 设备': 'MaixCAM2 裝置',
+    'MaixCAM2 设备': '基礎硬體',
     媒体处理: '媒體處理',
-    'MaixCAM2 AI': 'MaixCAM2 AI'
+    'MaixCAM2 AI': '人工智慧'
   },
   en: {
     Logic: 'Logic',
@@ -253,9 +253,9 @@ const TOOLBOX_LABELS = {
     Time: 'Time',
     时间: 'Time',
     串口打印: 'Serial print',
-    'MaixCAM2 设备': 'MaixCAM2 device',
+    'MaixCAM2 设备': 'Basic hardware',
     媒体处理: 'Media',
-    'MaixCAM2 AI': 'MaixCAM2 AI'
+    'MaixCAM2 AI': 'AI'
   }
 };
 

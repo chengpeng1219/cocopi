@@ -1,7 +1,7 @@
 {
   "name": "cocopi-portal",
   "private": true,
-  "version": "1.0.13",
+  "version": "1.0.14",
   "type": "module",
   "scripts": {
     "dev": "vite --host",
@@ -9,7 +9,8 @@
     "knowledge:build": "node scripts/build-knowledge.mjs",
     "build": "vite build",
     "preview": "vite preview --port 4173",
-    "test": "node --test"
+    "test": "node --test",
+    "version:snapshot": "node scripts/version-snapshot.mjs"
   },
   "dependencies": {
     "@yume-chan/adb": "^2.6.4",

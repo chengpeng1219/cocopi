@@ -1,14 +1,19 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js';
 import { HARDWARE_PARTS } from '../data/hardwareParts.js';
+import { useI18n } from '../lib/i18n.jsx';
 
 export default function CocoPiReal3DViewer({ onSelectPart, targetCamPos, zoomTrigger, resetTrigger }) {
+  const { language, t } = useI18n();
   const mountRef = useRef(null);
   const cameraRef = useRef(null);
   const controlsRef = useRef(null);
   const animTargetPos = useRef(null);
+  const requestRenderRef = useRef(() => {});
+  const [renderError, setRenderError] = useState('');
+  const [renderAttempt, setRenderAttempt] = useState(0);
 
   useEffect(() => {
     if (targetCamPos && cameraRef.current) {
@@ -17,6 +22,7 @@ export default function CocoPiReal3DViewer({ onSelectPart, targetCamPos, zoomTri
         target.multiplyScalar(8.6 / Math.max(target.length(), 0.01));
       }
       animTargetPos.current = target;
+      requestRenderRef.current();
     }
   }, [targetCamPos]);
 
@@ -30,6 +36,7 @@ export default function CocoPiReal3DViewer({ onSelectPart, targetCamPos, zoomTri
     if (nextPos.length() >= 2.5 && nextPos.length() <= 13) {
       cam.position.copy(nextPos);
       controlsRef.current.update();
+      requestRenderRef.current();
     }
   }, [zoomTrigger]);
 
@@ -40,11 +47,13 @@ export default function CocoPiReal3DViewer({ onSelectPart, targetCamPos, zoomTri
       cameraRef.current.aspect < 0.95
         ? new THREE.Vector3(3.5, 2.1, 8.6)
         : new THREE.Vector3(2.8, 1.8, 5.2);
+    requestRenderRef.current();
   }, [resetTrigger]);
 
   useEffect(() => {
     const container = mountRef.current;
     if (!container) return;
+    setRenderError('');
 
     const width = container.clientWidth || 680;
     const height = container.clientHeight || 440;
@@ -62,11 +71,22 @@ export default function CocoPiReal3DViewer({ onSelectPart, targetCamPos, zoomTri
     camera.position.set(...(narrowViewport ? [3.5, 2.1, 8.6] : [2.8, 1.8, 5.2]));
     cameraRef.current = camera;
 
-    const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
+    let renderer;
+    try {
+      renderer = new THREE.WebGLRenderer({
+        antialias: true,
+        powerPreference: 'high-performance'
+      });
+    } catch (_) {
+      setRenderError('webgl');
+      return;
+    }
     renderer.setSize(width, height);
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    renderer.setPixelRatio(
+      Math.min(window.devicePixelRatio, width < 900 ? 1.5 : 1.75)
+    );
     renderer.outputColorSpace = THREE.SRGBColorSpace;
-    renderer.shadowMap.enabled = true;
+    renderer.shadowMap.enabled = width >= 700;
     renderer.shadowMap.type = THREE.PCFShadowMap;
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
     renderer.toneMappingExposure = 1.08;
@@ -329,13 +349,19 @@ export default function CocoPiReal3DViewer({ onSelectPart, targetCamPos, zoomTri
       ctx.fillStyle = '#10b981';
       ctx.fillRect(568, 32, 28, 12);
 
+      const appNames =
+        language === 'en'
+          ? ['Recent', 'Settings', 'Camera', 'Vision', 'Detection', 'Emotion']
+          : language === 'zh-hant'
+            ? ['最近程式', '系統設定', '相機', '智慧識物', '智慧物體偵測', '人臉情緒辨識']
+            : ['最近程序', '系统设置', '相机', '智能识物', '智能物体检测', '人脸情绪识别'];
       const apps = [
-        { name: '最近程序', color: '#0ea5e9', x: 130, y: 155, symbol: '▶' },
-        { name: '系统设置', color: '#64748b', x: 320, y: 155, symbol: '⚙' },
-        { name: '相机', color: '#22c55e', x: 510, y: 155, symbol: '📷' },
-        { name: '智能识物', color: '#6366f1', x: 130, y: 335, symbol: '🧊' },
-        { name: '智能物体检测', color: '#06b6d4', x: 320, y: 335, symbol: '⛶' },
-        { name: '人脸情绪识别', color: '#f59e0b', x: 510, y: 335, symbol: '☺' }
+        { name: appNames[0], color: '#0ea5e9', x: 130, y: 155, symbol: '▶' },
+        { name: appNames[1], color: '#64748b', x: 320, y: 155, symbol: '⚙' },
+        { name: appNames[2], color: '#22c55e', x: 510, y: 155, symbol: '📷' },
+        { name: appNames[3], color: '#6366f1', x: 130, y: 335, symbol: '🧊' },
+        { name: appNames[4], color: '#06b6d4', x: 320, y: 335, symbol: '⛶' },
+        { name: appNames[5], color: '#f59e0b', x: 510, y: 335, symbol: '☺' }
       ];
       apps.forEach((app) => {
         ctx.fillStyle = app.color;
@@ -736,16 +762,29 @@ export default function CocoPiReal3DViewer({ onSelectPart, targetCamPos, zoomTri
       if (!container) return;
       const w = container.clientWidth;
       const h = container.clientHeight;
+      if (!w || !h) return;
       camera.aspect = w / h;
       camera.fov = camera.aspect < 0.95 ? 45 : 38;
       camera.updateProjectionMatrix();
       renderer.setSize(w, h);
+      requestRender();
     };
-    window.addEventListener('resize', handleResize);
+    const resizeObserver =
+      typeof ResizeObserver === 'function'
+        ? new ResizeObserver(handleResize)
+        : null;
+    if (resizeObserver) {
+      resizeObserver.observe(container);
+    } else {
+      window.addEventListener('resize', handleResize);
+    }
 
-    let reqId;
-    const animate = () => {
-      reqId = requestAnimationFrame(animate);
+    let reqId = null;
+    let visible = document.visibilityState !== 'hidden';
+    let intersecting = true;
+    const renderFrame = () => {
+      reqId = null;
+      if (!visible || !intersecting) return;
       if (animTargetPos.current) {
         camera.position.lerp(animTargetPos.current, 0.12);
         if (camera.position.distanceTo(animTargetPos.current) < 0.05) {
@@ -754,26 +793,114 @@ export default function CocoPiReal3DViewer({ onSelectPart, targetCamPos, zoomTri
       }
       controls.update();
       renderer.render(scene, camera);
+      if (animTargetPos.current) requestRender();
     };
-    animate();
+    const requestRender = () => {
+      if (reqId === null && visible && intersecting) {
+        reqId = requestAnimationFrame(renderFrame);
+      }
+    };
+    requestRenderRef.current = requestRender;
+    controls.addEventListener('change', requestRender);
+
+    const updateVisibility = () => {
+      visible = document.visibilityState !== 'hidden';
+      if (!visible && reqId !== null) {
+        cancelAnimationFrame(reqId);
+        reqId = null;
+      }
+      requestRender();
+    };
+    document.addEventListener('visibilitychange', updateVisibility);
+
+    const intersectionObserver =
+      typeof IntersectionObserver === 'function'
+        ? new IntersectionObserver(
+            ([entry]) => {
+              intersecting = Boolean(entry?.isIntersecting);
+              if (!intersecting && reqId !== null) {
+                cancelAnimationFrame(reqId);
+                reqId = null;
+              }
+              requestRender();
+            },
+            { threshold: 0.01 }
+          )
+        : null;
+    intersectionObserver?.observe(container);
+
+    const handleContextLost = (event) => {
+      event.preventDefault();
+      visible = false;
+      if (reqId !== null) cancelAnimationFrame(reqId);
+      reqId = null;
+      setRenderError('webgl');
+    };
+    domElem.addEventListener('webglcontextlost', handleContextLost);
+    requestRender();
 
     return () => {
-      cancelAnimationFrame(reqId);
+      if (reqId !== null) cancelAnimationFrame(reqId);
+      if (requestRenderRef.current === requestRender) {
+        requestRenderRef.current = () => {};
+      }
       controls.removeEventListener('start', stopAutoAnim);
+      controls.removeEventListener('change', requestRender);
       controls.dispose();
       domElem.removeEventListener('mousedown', onMouseDown);
       domElem.removeEventListener('mouseup', onMouseUp);
-      window.removeEventListener('resize', handleResize);
+      domElem.removeEventListener('webglcontextlost', handleContextLost);
+      document.removeEventListener('visibilitychange', updateVisibility);
+      resizeObserver?.disconnect();
+      if (!resizeObserver) window.removeEventListener('resize', handleResize);
+      intersectionObserver?.disconnect();
+      scene.traverse((object) => {
+        object.geometry?.dispose?.();
+        const materials = Array.isArray(object.material)
+          ? object.material
+          : [object.material];
+        materials.filter(Boolean).forEach((material) => {
+          Object.values(material).forEach((value) => {
+            if (value?.isTexture) value.dispose();
+          });
+          material.dispose?.();
+        });
+      });
+      scene.clear();
       environmentTexture.dispose();
       pmremGenerator.dispose();
       renderer.dispose();
+      renderer.forceContextLoss();
     };
-  }, []);
+  }, [language, renderAttempt]);
+
+  if (renderError) {
+    return (
+      <div className="flex h-full min-h-[320px] w-full flex-col items-center justify-center rounded-[var(--radius-box)] border border-accent-line bg-accent-soft p-6 text-center">
+        <p className="text-[13px] font-semibold text-ink">
+          {t('overview.webglError')}
+        </p>
+        <p className="mt-1 text-[11px] text-ink-dim">
+          {t('overview.webglHint')}
+        </p>
+        <button
+          type="button"
+          onClick={() => {
+            setRenderError('');
+            setRenderAttempt((attempt) => attempt + 1);
+          }}
+          className="mt-3 rounded-[var(--radius-control)] border border-accent-line bg-surface px-3 py-1.5 text-[12px] font-semibold text-accent hover:bg-accent-soft"
+        >
+          {t('overview.webglRetry')}
+        </button>
+      </div>
+    );
+  }
 
   return (
     <div
       ref={mountRef}
-      className="relative h-[330px] w-full cursor-grab overflow-hidden rounded-[var(--radius-box)] border border-accent-line bg-accent-soft active:cursor-grabbing sm:h-[380px] lg:h-[470px]"
+      className="relative h-full min-h-[320px] w-full cursor-grab overflow-hidden rounded-[var(--radius-box)] border border-accent-line bg-accent-soft active:cursor-grabbing"
     />
   );
 }

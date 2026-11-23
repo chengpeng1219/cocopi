@@ -32,7 +32,7 @@ test('rate limits are isolated per forwarded client IP', () => {
     'x-real-ip': '203.0.113.21'
   });
 
-  for (let index = 0; index < 20; index += 1) {
+  for (let index = 0; index < 5; index += 1) {
     checkRateLimit(firstClient, env);
   }
   assert.throws(() => checkRateLimit(firstClient, env), /请求过于频繁/);

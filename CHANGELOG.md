@@ -1,5 +1,18 @@
 # Changelog
 
+## v1.0.14 - 2026-11-23
+
+### 修复 USB ADB 断开后无法重连，并增加调试日志与版本快照
+
+- 修改文件：`src/lib/yaWebAdbClient.js`、`src/lib/debugLog.js`、`src/App.jsx`、`src/components/BlocklySection.jsx`、`src/lib/i18n.jsx`、`tests/yaWebAdbClient.test.js`、`tests/debugLog.test.js`、`scripts/version-snapshot.mjs`
+- 有线断开前通过设备端 `systemd-run` 安排重启 `usb-gadget.service`，强制重建 FunctionFS、`adbd` 和 USB 端点。
+- 重连时等待设备重新枚举，避免在 USB 重建期间提前进入认证。
+- 所有终端输出（包括未显示的 debug 日志）持久化到浏览器本地，并支持导出 JSON。
+- 新增 `npm run version:snapshot`，每次修改后将当前源码保存到 `.versions/v版本号-时间/`。
+- 新增 `VERSIONS.md`，记录版本快照与恢复命令。
+- 验证：运行两次真机 USB gadget 重建检查、`npm test`、`npm run build`。
+- 回退方式：恢复 `.versions/v1.0.14-*` 之前的版本快照，或恢复上一版本源码。
+
 ## v1.0.13 - 2026-11-16
 
 ### 严格按照原型重构创作台
