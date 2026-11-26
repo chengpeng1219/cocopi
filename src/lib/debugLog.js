@@ -6,6 +6,10 @@ const MAX_MESSAGE_LENGTH = 8000;
 
 let entries = null;
 let activeSession = null;
+let pendingEntries = [];
+let flushTimer = null;
+let flushPromise = null;
+let flushListenersInstalled = false;
 
 function getStorage() {
   try {
@@ -33,7 +37,12 @@ function saveEntries() {
   try {
     storage.setItem(DEBUG_LOG_STORAGE_KEY, JSON.stringify(loadEntries()));
   } catch {
-    // Logging must never interrupt device operations or the UI.
+    try {
+      entries = loadEntries().slice(-Math.floor(MAX_ENTRIES / 2));
+      storage.setItem(DEBUG_LOG_STORAGE_KEY, JSON.stringify(entries));
+    } catch {
+      // Logging must never interrupt device operations or the UI.
+    }
   }
 }
 
@@ -47,17 +56,88 @@ function createSessionId() {
 
 function appendEntry(type, message, metadata = {}) {
   const list = loadEntries();
-  list.push({
+  const entry = {
     timestamp: new Date().toISOString(),
     sessionId: activeSession?.id || null,
     type: String(type || 'info'),
     message: String(message ?? '').slice(0, MAX_MESSAGE_LENGTH),
     ...metadata
-  });
+  };
+  list.push(entry);
   if (list.length > MAX_ENTRIES) {
     list.splice(0, list.length - MAX_ENTRIES);
   }
   saveEntries();
+  pendingEntries.push(entry);
+  if (pendingEntries.length > MAX_ENTRIES) {
+    pendingEntries.splice(0, pendingEntries.length - MAX_ENTRIES);
+  }
+  scheduleFlush();
+}
+
+function scheduleFlush() {
+  if (
+    typeof window === 'undefined' ||
+    typeof fetch !== 'function' ||
+    flushTimer
+  ) {
+    return;
+  }
+  flushTimer = setTimeout(() => {
+    flushTimer = null;
+    void flushDebugLogs();
+  }, 1_000);
+  flushTimer.unref?.();
+}
+
+function installFlushListeners() {
+  if (flushListenersInstalled || typeof window === 'undefined') return;
+  flushListenersInstalled = true;
+  window.addEventListener('pagehide', () => {
+    void flushDebugLogs({ keepalive: true });
+  });
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'hidden') {
+      void flushDebugLogs({ keepalive: true });
+    }
+  });
+}
+
+export async function flushDebugLogs({ keepalive = false } = {}) {
+  if (
+    flushPromise ||
+    pendingEntries.length === 0 ||
+    !activeSession ||
+    typeof fetch !== 'function'
+  ) {
+    return flushPromise;
+  }
+
+  const batch = pendingEntries.splice(0, 500);
+  flushPromise = fetch('/api/debug-log', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      session: activeSession,
+      entries: batch
+    }),
+    keepalive
+  })
+    .then((response) => {
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    })
+    .catch(() => {
+      pendingEntries.unshift(...batch);
+      if (pendingEntries.length > MAX_ENTRIES) {
+        pendingEntries.splice(0, pendingEntries.length - MAX_ENTRIES);
+      }
+      scheduleFlush();
+    })
+    .finally(() => {
+      flushPromise = null;
+      if (pendingEntries.length > 0) scheduleFlush();
+    });
+  return flushPromise;
 }
 
 export function startDebugSession(metadata = {}) {
@@ -80,6 +160,7 @@ export function startDebugSession(metadata = {}) {
       metadata.entryUrl ||
       (typeof location !== 'undefined' ? location.href : '')
   };
+  installFlushListeners();
   appendEntry('session.start', '调试日志会话开始', activeSession);
   return activeSession;
 }
@@ -107,28 +188,8 @@ export function getDebugLogExport(metadata = {}) {
 export function clearDebugLogs() {
   entries = [];
   activeSession = null;
+  pendingEntries = [];
+  if (flushTimer) clearTimeout(flushTimer);
+  flushTimer = null;
   saveEntries();
-}
-
-export function downloadDebugLogs(metadata = {}) {
-  if (typeof document === 'undefined' || typeof Blob === 'undefined') {
-    return '';
-  }
-  const payload = getDebugLogExport(metadata);
-  const stamp = new Date()
-    .toISOString()
-    .replaceAll(':', '')
-    .replaceAll('-', '')
-    .replace(/\.\d{3}Z$/, 'Z');
-  const filename = `cocopi-debug-v${metadata.version || 'unknown'}-${stamp}.json`;
-  const blob = new Blob([JSON.stringify(payload, null, 2)], {
-    type: 'application/json'
-  });
-  const url = URL.createObjectURL(blob);
-  const anchor = document.createElement('a');
-  anchor.href = url;
-  anchor.download = filename;
-  anchor.click();
-  setTimeout(() => URL.revokeObjectURL(url), 0);
-  return filename;
 }

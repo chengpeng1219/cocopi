@@ -3,6 +3,7 @@ import react from '@vitejs/plugin-react';
 import tailwindcss from '@tailwindcss/vite';
 import { handleAiRequest } from './server/aiProxy.js';
 import { handleDeviceSshRequest } from './server/deviceSsh.js';
+import { handleDebugLogRequest } from './server/debugLog.js';
 
 function cocopiAiProxyPlugin(env) {
   return {
@@ -28,6 +29,16 @@ function cocopiAiProxyPlugin(env) {
           res.end(JSON.stringify({ error: 'Internal Server Error' }));
         });
       });
+      server.middlewares.use('/api/debug-log', (req, res) => {
+        handleDebugLogRequest(req, res, { env }).catch((error) => {
+          console.error('[debug-log] dev middleware error', error);
+          if (!res.headersSent) {
+            res.statusCode = 500;
+            res.setHeader('Content-Type', 'application/json; charset=utf-8');
+          }
+          res.end(JSON.stringify({ error: 'Internal Server Error' }));
+        });
+      });
     }
   };
 }
@@ -41,7 +52,7 @@ export default defineConfig(({ mode }) => {
       port: 5173,
       open: true,
       watch: {
-        ignored: ['**/.maixpy/**']
+        ignored: ['**/.maixpy/**', '**/logs/**']
       }
     },
     build: {

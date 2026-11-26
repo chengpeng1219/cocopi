@@ -1,5 +1,75 @@
 # Changelog
 
+## v1.0.20 - 2026-11-26
+
+### 调整 CocoPi2 使用说明页面配色
+
+- 修改文件：`src/components/UsageGuidePage.jsx`
+- 深色首屏改为浅蓝灰背景，正文与操作按钮改为深浅平衡的常规配色。
+- 三维模型下方的部件说明改为浅色浮层，保留可读性和层次。
+- 移除首屏装饰性蓝色光晕。
+- 验证：桌面与移动端截图、内部滚动、控制台检查、`npm test`、`npm run build`。
+- 回退方式：恢复 `v1.0.20-*` 之前的版本快照。
+
+## v1.0.19 - 2026-11-26
+
+### 新增 CocoPi2 使用说明页面
+
+- 修改文件：`src/data/usageGuideContent.js`、`src/components/UsageGuidePage.jsx`、`src/components/OverviewSection.jsx`、`src/App.jsx`、`src/lib/i18n.jsx`、`tests/usageGuideContent.test.js`
+- 在硬件仿真的“开始体验”旁新增“使用说明”入口。
+- 使用说明独立页面包含 CocoPi2 产品介绍、六面硬件功能、首次使用步骤、接口速查、网站工作流、安全事项和常见问题。
+- 复用 CocoPi2 三维模型作为产品视觉，并支持点击部件查看说明。
+- 支持简体中文、繁体中文和英文，页面地址使用 `#guide`，浏览器返回可恢复原页面。
+- 验证：内容完整性测试、响应式浏览器检查、`npm test`、`npm run build`。
+- 回退方式：恢复 `v1.0.19-*` 之前的版本快照。
+
+## v1.0.18 - 2026-11-23
+
+### 为基础硬件、媒体处理和人工智能增加二级积木分类
+
+- 修改文件：`src/lib/maixcam2Groups.js`、`src/lib/maixcam2Kit.js`、`src/components/BlocklySection.jsx`、`tests/maixcam2Groups.test.js`
+- 基础硬件拆分为基础、输入/输出、传感器、屏幕、摄像头、麦克风和扬声器。
+- 媒体处理拆分为图形处理和视频处理。
+- 人工智能拆分为 AI 视觉、LLM 大模型、大模型（需 4G）和 AI 听觉。
+- 点击一级分类后在当前侧栏下方展开二级分类，再选择二级分类打开对应积木。
+- 保证原有 48/28/148 个积木全部归类且无重复。
+- 验证：分类映射测试、浏览器交互截图、`npm test`、`npm run build`。
+- 回退方式：恢复 `v1.0.18-*` 之前的版本快照。
+
+## v1.0.17 - 2026-11-23
+
+### 修复完整 locale 导致的创作台加载失败
+
+- 修改文件：`src/lib/legacyLocale.js`、`src/lib/maixcam2Kit.js`、`tests/legacyLocale.test.js`
+- 兼容旧版 locale 脚本对只读 Blockly ES 模块 `Categories` 属性的写入。
+- 保留完整中英文积木消息加载，同时恢复创作台正常进入。
+- 浏览器实测时间、基础硬件、人工智能 AI 三类积木均显示简体中文。
+- 验证：无头 Chrome 截图、控制台无异常、`npm test`、`npm run build`。
+- 回退方式：恢复 `v1.0.17-*` 之前的版本快照。
+
+## v1.0.16 - 2026-11-23
+
+### 修复简体中文页面中的英文积木
+
+- 修改文件：`src/lib/maixcam2Kit.js`、`src/components/BlocklySection.jsx`、`tests/maixcam2Kit.test.js`
+- 运行时改为加载完整的 `zh-hans.js`、`zh-hant.js` 和 `en.js` Blockly locale，而不是只加载不完整的 `messages.json`。
+- 调整 locale 初始化顺序，避免基础 Blockly locale 覆盖 MaixCAM2 自定义积木消息。
+- 覆盖时间、基础硬件、人工智能 AI 三类中缺失的中文积木消息。
+- 验证：`npm test`、`npm run build`。
+- 回退方式：恢复 `v1.0.16-*` 之前的版本快照。
+
+## v1.0.15 - 2026-11-23
+
+### 自动保存调试日志并调整 AI 未连接交互
+
+- 修改文件：`src/lib/debugLog.js`、`src/App.jsx`、`src/components/BlocklySection.jsx`、`src/lib/i18n.jsx`、`server/debugLog.js`、`server/index.js`、`vite.config.js`、`nginx.conf`、`nginx.https.conf.example`、`tests/debugLog.test.js`、`tests/debugLogServer.test.js`
+- 终端日志自动批量写入 `logs/debug/日期_会话.jsonl`，不需要用户手动导出。
+- 浏览器本地存储继续作为服务端不可用时的兜底。
+- 移除终端手动导出按钮。
+- AI 编程模式页签与生成按钮在未连接时保持可点击，点击后显示“请先连接设备”提示。
+- 验证：`npm test`、`npm run build`。
+- 回退方式：恢复 `v1.0.15-*` 之前的版本快照。
+
 ## v1.0.14 - 2026-11-23
 
 ### 修复 USB ADB 断开后无法重连，并增加调试日志与版本快照

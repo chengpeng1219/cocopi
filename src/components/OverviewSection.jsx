@@ -1,5 +1,6 @@
 import { lazy, Suspense } from 'react';
 import {
+  BookOpen,
   Box,
   Monitor,
   MousePointer2,
@@ -50,7 +51,8 @@ export default function OverviewSection({
   onZoom,
   onResetView,
   resetTrigger,
-  onStart
+  onStart,
+  onOpenGuide
 }) {
   const { language, t } = useI18n();
   const labels = getHardwareLabels(language);
@@ -101,6 +103,14 @@ export default function OverviewSection({
             >
               <Play aria-hidden="true" className="h-4 w-4 fill-current" />
               {t('overview.start')}
+            </button>
+            <button
+              type="button"
+              onClick={onOpenGuide}
+              className="inline-flex min-h-10 items-center justify-center gap-2 rounded-[var(--radius-control)] border border-accent-line bg-surface px-4 text-[14px] font-semibold text-accent transition-colors hover:bg-accent-soft"
+            >
+              <BookOpen aria-hidden="true" className="h-4 w-4" />
+              {t('overview.guide')}
             </button>
             <span className="text-[12px] text-ink-dim">{t('overview.startHint')}</span>
           </div>

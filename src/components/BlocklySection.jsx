@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import * as Blockly from 'blockly';
 import {
   ArrowUpRight,
@@ -125,14 +125,16 @@ export default function BlocklySection({
   terminalLogs = [],
   terminalContainerRef,
   onClearLogs,
-  onExportLogs,
   replInput,
   onReplInputChange,
   onSendCommand,
   workspaceApiRef
 }) {
   const { language, t } = useI18n();
-  const categories = getMaixcam2CategoryList(language);
+  const categories = useMemo(
+    () => getMaixcam2CategoryList(language),
+    [language]
+  );
   const sampleGroups = getMaixcam2SampleGroups();
   const workspaceGridRef = useRef(null);
   const editorRef = useRef(null);
@@ -146,6 +148,7 @@ export default function BlocklySection({
   const [mode, setMode] = useState('blocks');
   const [codeEditable, setCodeEditable] = useState(false);
   const [activeCategory, setActiveCategory] = useState(0);
+  const [expandedCategoryId, setExpandedCategoryId] = useState('');
   const [categoryQuery, setCategoryQuery] = useState('');
   const [copied, setCopied] = useState(false);
   const [rightWidth, setRightWidth] = useState(390);
@@ -156,21 +159,36 @@ export default function BlocklySection({
   const [showExamples, setShowExamples] = useState(false);
 
   const connected = connStatus === 'connected';
-  const filteredCategories = categories
-    .map((category, index) => ({ ...category, index }))
-    .filter((category) =>
-      category.name.toLowerCase().includes(categoryQuery.trim().toLowerCase())
-    );
+  const filteredCategories = useMemo(() => {
+    const query = categoryQuery.trim().toLowerCase();
+    return categories
+      .map((category) => {
+        const children = category.children || [];
+        const matchingChildren = query
+          ? children.filter((child) =>
+              child.name.toLowerCase().includes(query)
+            )
+          : children;
+        return {
+          ...category,
+          matchingChildren,
+          visibleChildren:
+            query && !category.name.toLowerCase().includes(query)
+              ? matchingChildren
+              : children
+        };
+      })
+      .filter(
+        (category) =>
+          !query ||
+          category.name.toLowerCase().includes(query) ||
+          category.matchingChildren.length > 0
+      );
+  }, [categories, categoryQuery]);
 
   useEffect(() => {
     onCodeChangeRef.current = onCodeChange;
   }, [onCodeChange]);
-
-  useEffect(() => {
-    if (!connected && mode === 'ai') {
-      setMode('blocks');
-    }
-  }, [connected, mode]);
 
   const emitWorkspaceCode = (workspace) => {
     const nextCode = generateMaixcam2Python(workspace);
@@ -190,8 +208,8 @@ export default function BlocklySection({
   useEffect(() => {
     if (!containerRef.current) return;
 
-    initializeMaixcam2Kit(language);
     applyMaixBlockLocale(language);
+    initializeMaixcam2Kit(language);
     const toolbox = getMaixcam2Toolbox(language);
     const definitionScan = scanMaixcam2ToolboxDefinitions();
     if (
@@ -528,8 +546,18 @@ export default function BlocklySection({
     blocklyWorkspaceRef.current?.getToolbox()?.selectItemByPosition(index);
   };
 
+  const handleGroupClick = (category) => {
+    if (!category.children?.length) {
+      handleCategoryClick(category.index);
+      return;
+    }
+    setMode('blocks');
+    setExpandedCategoryId((current) =>
+      current === category.id ? '' : category.id
+    );
+  };
+
   const handleModeChange = (nextMode) => {
-    if (nextMode === 'ai' && !connected) return;
     setMode(nextMode);
     if (nextMode === 'ai') {
       blocklyWorkspaceRef.current?.getToolbox()?.clearSelection();
@@ -694,32 +722,89 @@ export default function BlocklySection({
             </label>
           </div>
           <div className="min-h-0 flex-1 overflow-y-auto px-2 py-2">
-            {filteredCategories.map((category) => (
-              <button
-                key={category.name}
-                type="button"
-                onClick={() => handleCategoryClick(category.index)}
-                title={category.name}
-                className={cx(
-                  'flex min-h-9 w-full items-center gap-2.5 rounded-[7px] px-2.5 text-left text-[12px] font-semibold transition-colors',
-                  activeCategory === category.index && mode === 'blocks'
-                    ? 'bg-accent-soft text-accent'
-                    : 'text-ink-soft hover:bg-surface-sunken hover:text-ink'
-                )}
-              >
-                <span
-                  className="flex h-5 w-5 shrink-0 items-center justify-center rounded-[5px] text-[11px]"
-                  style={{
-                    color: category.colour || '#2563eb',
-                    backgroundColor: `${category.colour || '#2563eb'}14`
-                  }}
-                >
-                  {CATEGORY_SYMBOLS[category.index] || '◇'}
-                </span>
-                <span className="truncate">{category.name}</span>
-                <span className="ml-auto text-line-strong">›</span>
-              </button>
-            ))}
+            {filteredCategories.map((category) => {
+              const hasChildren = Boolean(category.children?.length);
+              const activeChild = category.children?.some(
+                (child) => child.index === activeCategory
+              );
+              const expanded =
+                hasChildren &&
+                (expandedCategoryId === category.id ||
+                  Boolean(categoryQuery.trim()));
+              return (
+                <div key={category.id || category.name}>
+                  <button
+                    type="button"
+                    onClick={() => handleGroupClick(category)}
+                    title={category.name}
+                    aria-expanded={hasChildren ? expanded : undefined}
+                    className={cx(
+                      'flex min-h-9 w-full items-center gap-2.5 rounded-[7px] px-2.5 text-left text-[12px] font-semibold transition-colors',
+                      (activeCategory === category.index || activeChild) &&
+                        mode === 'blocks'
+                        ? 'bg-accent-soft text-accent'
+                        : expanded
+                          ? 'bg-surface-sunken text-ink'
+                          : 'text-ink-soft hover:bg-surface-sunken hover:text-ink'
+                    )}
+                  >
+                    <span
+                      className="flex h-5 w-5 shrink-0 items-center justify-center rounded-[5px] text-[11px]"
+                      style={{
+                        color: category.colour || '#2563eb',
+                        backgroundColor: `${category.colour || '#2563eb'}14`
+                      }}
+                    >
+                      {CATEGORY_SYMBOLS[category.symbolIndex] || '◇'}
+                    </span>
+                    <span className="truncate">{category.name}</span>
+                    <span
+                      className={cx(
+                        'ml-auto text-line-strong transition-transform',
+                        expanded && 'rotate-90'
+                      )}
+                    >
+                      ›
+                    </span>
+                  </button>
+                  {hasChildren && (
+                    <div
+                      className={cx(
+                        'grid overflow-hidden transition-[grid-template-rows,opacity] duration-150',
+                        expanded
+                          ? 'grid-rows-[1fr] opacity-100'
+                          : 'grid-rows-[0fr] opacity-0'
+                      )}
+                    >
+                      <div className="min-h-0 space-y-0.5 py-1 pl-3">
+                        {(expanded ? category.visibleChildren : []).map(
+                          (child) => (
+                            <button
+                              key={child.id}
+                              type="button"
+                              onClick={() => handleCategoryClick(child.index)}
+                              title={child.name}
+                              className={cx(
+                                'flex min-h-8 w-full items-center gap-2 rounded-r-[6px] border-l-[3px] px-3 text-left text-[12px] font-medium transition-colors',
+                                activeCategory === child.index && mode === 'blocks'
+                                  ? 'bg-accent-soft text-accent'
+                                  : 'text-ink-soft hover:bg-surface-sunken hover:text-ink'
+                              )}
+                              style={{ borderLeftColor: child.colour || '#2563eb' }}
+                            >
+                              <span className="truncate">{child.name}</span>
+                              <span className="ml-auto font-mono text-[10px] text-ink-dim">
+                                {child.blockCount}
+                              </span>
+                            </button>
+                          )
+                        )}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
             {!filteredCategories.length && (
               <p className="px-3 py-8 text-center text-[12px] text-ink-dim">
                 {t('blockly.noMatches')}
@@ -750,14 +835,11 @@ export default function BlocklySection({
             <button
               type="button"
               onClick={() => handleModeChange('ai')}
-              disabled={!connected}
-              title={!connected ? t('blockly.aiNeedsConnection') : undefined}
               className={cx(
                 'relative inline-flex min-h-12 items-center gap-2 text-[13px] font-bold transition-colors',
                 mode === 'ai'
                   ? 'text-accent after:absolute after:inset-x-0 after:bottom-0 after:h-0.5 after:bg-accent'
-                  : 'text-ink-dim hover:text-ink',
-                !connected && 'cursor-not-allowed opacity-45 hover:text-ink-dim'
+                  : 'text-ink-dim hover:text-ink'
               )}
             >
               <Sparkles aria-hidden="true" className="h-4 w-4" />
@@ -852,6 +934,9 @@ export default function BlocklySection({
                       placeholder={t('blockly.aiPromptPlaceholder')}
                       aria-label={t('blockly.aiPromptAria')}
                     />
+                    {!connected && (
+                      <Notice>{t('blockly.aiNeedsConnection')}</Notice>
+                    )}
                     <div className="flex flex-wrap gap-2">
                       {[
                         { label: 'blockly.quickFix', prompt: 'blockly.aiRepairPlaceholder' },
@@ -878,7 +963,7 @@ export default function BlocklySection({
                           <button
                             type="button"
                             onClick={() => onAiRepair(false)}
-                            disabled={isGeneratingAi || isProgramBusy || !connected}
+                            disabled={isGeneratingAi || isProgramBusy}
                             className={buttonStyles.dangerSoft}
                           >
                             {t('blockly.aiRepair')}
@@ -886,7 +971,7 @@ export default function BlocklySection({
                           <button
                             type="button"
                             onClick={onAiRepairAndRun}
-                            disabled={isGeneratingAi || isProgramBusy || !connected}
+                            disabled={isGeneratingAi || isProgramBusy}
                             className={cx(buttonStyles.base, 'border-ok-line bg-ok-soft text-ok')}
                           >
                             {t('blockly.aiRepairRun')}
@@ -902,7 +987,7 @@ export default function BlocklySection({
                         <button
                           type="button"
                           onClick={() => onAiGenerate(false)}
-                          disabled={isGeneratingAi || !connected}
+                          disabled={isGeneratingAi}
                           className={buttonStyles.primary}
                         >
                           {isGeneratingAi ? (
@@ -915,7 +1000,7 @@ export default function BlocklySection({
                         <button
                           type="button"
                           onClick={onAiGenerateAndRun}
-                          disabled={isGeneratingAi || isProgramBusy || !connected}
+                          disabled={isGeneratingAi || isProgramBusy}
                           className={cx(buttonStyles.base, 'border-ok-line bg-ok-soft text-ok')}
                         >
                           <Play aria-hidden="true" className="h-4 w-4 fill-current" />
@@ -970,14 +1055,6 @@ export default function BlocklySection({
                 {terminalCollapsed
                   ? t('blockly.expandTerminal')
                   : t('blockly.collapseTerminal')}
-              </button>
-              <button
-                type="button"
-                onClick={onExportLogs}
-                className="inline-flex items-center gap-1 text-[11px] text-console-dim hover:text-console-text"
-              >
-                <Download aria-hidden="true" className="h-3.5 w-3.5" />
-                {t('blockly.exportLogs')}
               </button>
               <button
                 type="button"

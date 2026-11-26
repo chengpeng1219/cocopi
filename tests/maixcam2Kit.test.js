@@ -101,3 +101,35 @@ test('every media asset referenced by migrated blocks is present', () => {
     );
   }
 });
+
+test('complete locale sources define the migrated Chinese block labels', () => {
+  const source = fs.readFileSync(
+    path.join(kitRoot, 'i18n/zh-hans.js'),
+    'utf8'
+  );
+  const messages = {};
+  new Function('Blockly', 'goog', source)(
+    { Msg: messages, Categories: {} },
+    { provide() {}, require() {} }
+  );
+  for (const key of [
+    'ARD_TIME_DELAY',
+    'ARD_TIME_MS',
+    'ARD_TIME_DELAY_seconds',
+    'maixcam2_touch_down',
+    'maixcam2_touch_up',
+    'maixcam2_pose_detect',
+    'maixcam2_pose_count',
+    'maixcam2_pose_list',
+    'maixcam2_seg_init',
+    'maixcam2_hand_detect',
+    'maixcam2_obb_detect',
+    'maixcam2_ocr_detect',
+    'maixcam2_yworld_detect'
+  ]) {
+    assert.ok(messages[key], `missing Chinese block message: ${key}`);
+  }
+  assert.equal(messages.ARD_TIME_DELAY, '等待');
+  assert.equal(messages.maixcam2_touch_down, '触摸刚按下？');
+  assert.equal(messages.maixcam2_pose_detect, '检测人体关键点，图像源为:');
+});

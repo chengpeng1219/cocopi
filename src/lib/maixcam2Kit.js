@@ -5,6 +5,8 @@ import * as zhHansLocale from 'blockly/msg/zh-hans';
 import * as zhHantLocale from 'blockly/msg/zh-hant';
 import { pythonGenerator } from 'blockly/python';
 import { MAIX_PYTHON_PREAMBLE } from './maixBlocks.js';
+import { evaluateLegacyLocale } from './legacyLocale.js';
+import { partitionNestedCategoryBlocks } from './maixcam2Groups.js';
 
 import mpythonBlocksSource from '../../maixcam2-block-kit/runtime/blocks_mpython.min.js?raw';
 import mpythonGeneratorSource from '../../maixcam2-block-kit/runtime/python_mpython.min.js?raw';
@@ -28,6 +30,9 @@ import llm4gSource from '../../maixcam2-block-kit/blocks/maixcam2_llm4g.js?raw';
 import sd4gSource from '../../maixcam2-block-kit/blocks/maixcam2_sd4g.js?raw';
 import speechSource from '../../maixcam2-block-kit/blocks/maixcam2_speech.js?raw';
 import kitMessages from '../../maixcam2-block-kit/i18n/messages.json';
+import zhHansKitMessagesSource from '../../maixcam2-block-kit/i18n/zh-hans.js?raw';
+import zhHantKitMessagesSource from '../../maixcam2-block-kit/i18n/zh-hant.js?raw';
+import enKitMessagesSource from '../../maixcam2-block-kit/i18n/en.js?raw';
 import toolboxConfig from '../../maixcam2-block-kit/toolbox.json';
 import sampleIndex from '../../maixcam2-block-kit/samples/index.json';
 
@@ -35,6 +40,12 @@ const LOCALES = {
   'zh-hans': zhHansLocale,
   'zh-hant': zhHantLocale,
   en: enLocale
+};
+
+const KIT_LOCALE_SOURCES = {
+  'zh-hans': zhHansKitMessagesSource,
+  'zh-hant': zhHantKitMessagesSource,
+  en: enKitMessagesSource
 };
 
 const BASE_MESSAGE_KEYS = new Set([
@@ -989,9 +1000,47 @@ function localizeToolbox(root, language) {
   });
 }
 
+function addNestedToolboxCategories(root, language) {
+  const document = root.ownerDocument;
+  const categories = Array.from(root.children).filter(
+    (node) => node.nodeName.toLowerCase() === 'category'
+  );
+  for (const parent of categories) {
+    const parentId = parent.getAttribute('id');
+    const blocks = Array.from(parent.children).filter(
+      (node) => node.nodeName.toLowerCase() === 'block'
+    );
+    const groups = partitionNestedCategoryBlocks(
+      parentId,
+      blocks.map((block) => block.getAttribute('type')).filter(Boolean),
+      language
+    );
+    if (groups.length === 0) continue;
+    const byType = new Map(
+      blocks.map((block) => [block.getAttribute('type'), block])
+    );
+    parent.setAttribute('cocopi-group', 'true');
+    let insertionPoint = parent.nextSibling;
+    for (const group of groups) {
+      const category = document.createElement('category');
+      category.setAttribute('id', group.id);
+      category.setAttribute('name', group.name);
+      category.setAttribute('colour', group.colour);
+      category.setAttribute('cocopi-parent', parentId);
+      for (const type of group.blocks) {
+        const source = byType.get(type);
+        if (source) category.appendChild(source.cloneNode(true));
+      }
+      root.insertBefore(category, insertionPoint);
+      insertionPoint = category.nextSibling;
+    }
+  }
+}
+
 export function initializeMaixcam2Kit(language = 'zh-hans') {
   const normalized = normalizeKitLanguage(language);
   Blockly.setLocale(LOCALES[normalized]);
+  evaluateLegacyLocale(KIT_LOCALE_SOURCES[normalized], Blockly);
   for (const [key, value] of Object.entries(kitMessages[normalized] || {})) {
     if (!BASE_MESSAGE_KEYS.has(key) || Blockly.Msg[key] === undefined) {
       Blockly.Msg[key] = value;
@@ -1057,18 +1106,30 @@ export function getMaixcam2Toolbox(language = 'zh-hans') {
   const normalized = initializeMaixcam2Kit(language);
   const root = Blockly.utils.xml.textToDom(toolboxConfig.toolboxXml);
   localizeToolbox(root, normalized);
+  addNestedToolboxCategories(root, normalized);
   return root;
 }
 
 export function getMaixcam2CategoryList(language = 'zh-hans') {
   const toolbox = getMaixcam2Toolbox(language);
-  return Array.from(toolbox.children)
+  const categories = Array.from(toolbox.children)
     .filter((node) => node.nodeName.toLowerCase() === 'category')
-    .map((category) => ({
+    .map((category, index) => ({
+      index,
       id: category.getAttribute('id') || '',
       name: category.getAttribute('name') || '',
       colour: category.getAttribute('colour') || '',
-      blockCount: category.querySelectorAll('block').length
+      parentId: category.getAttribute('cocopi-parent') || '',
+      blockCount: Array.from(category.children).filter(
+        (node) => node.nodeName.toLowerCase() === 'block'
+      ).length
+    }));
+  return categories
+    .filter((category) => !category.parentId)
+    .map((category, symbolIndex) => ({
+      ...category,
+      symbolIndex,
+      children: categories.filter((child) => child.parentId === category.id)
     }));
 }
 

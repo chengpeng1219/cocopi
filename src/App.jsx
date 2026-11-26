@@ -24,7 +24,6 @@ import {
 import { requestMaixPyCode } from './lib/aiClient.js';
 import { validateMaixPyCode, summarizeDeviceOutput } from './lib/maixpyValidator.js';
 import {
-  downloadDebugLogs,
   recordDebugLog,
   startDebugSession
 } from './lib/debugLog.js';
@@ -55,6 +54,14 @@ const APP_VERSION = packageInfo.version;
 const IMPORTANT_PLATFORM_INFO_PATTERN =
   /失败|错误|超时|断开|恢复|取消|不可用|未连接|停止|重试|重连|握手/i;
 const BlocklySection = lazy(() => import('./components/BlocklySection.jsx'));
+const UsageGuidePage = lazy(() => import('./components/UsageGuidePage.jsx'));
+
+function sectionFromHash() {
+  if (typeof window === 'undefined') return 'overview';
+  if (window.location.hash === '#guide') return 'guide';
+  if (window.location.hash === '#blocks') return 'blocks';
+  return 'overview';
+}
 
 startDebugSession({ version: APP_VERSION });
 
@@ -63,7 +70,7 @@ startDebugSession({ version: APP_VERSION });
 // ==========================================
 export default function App() {
   const { language, setLanguage, t } = useI18n();
-  const [activeSection, setActiveSection] = useState('overview');
+  const [activeSection, setActiveSection] = useState(sectionFromHash);
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [showDeviceDrawer, setShowDeviceDrawer] = useState(false);
 
@@ -138,8 +145,24 @@ export default function App() {
   const navigateToSection = (sectionId) => {
     setActiveSection(sectionId);
     setMobileNavOpen(false);
+    if (typeof window !== 'undefined') {
+      const hash = sectionId === 'overview' ? '#overview' : `#${sectionId}`;
+      if (window.location.hash !== hash) {
+        window.history.pushState({ sectionId }, '', hash);
+      }
+    }
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
+
+  useEffect(() => {
+    const applyHashSection = () => setActiveSection(sectionFromHash());
+    window.addEventListener('hashchange', applyHashSection);
+    window.addEventListener('popstate', applyHashSection);
+    return () => {
+      window.removeEventListener('hashchange', applyHashSection);
+      window.removeEventListener('popstate', applyHashSection);
+    };
+  }, []);
 
   useEffect(() => {
     if (!showQrModal) return;
@@ -196,16 +219,6 @@ export default function App() {
         : [{ time: timeStr, type: keepShell ? 'device' : type, text: line }];
 
       setTerminalLogs((prev) => entries.reduce(appendTerminalEntry, prev));
-    }
-  };
-
-  const handleExportLogs = () => {
-    recordDebugLog('[调试日志] 请求导出完整调试日志', 'system');
-    const filename = downloadDebugLogs({ version: APP_VERSION });
-    if (filename) {
-      appendLog(`[调试日志] 已导出 ${filename}`, 'success');
-    } else {
-      appendLog('[调试日志] 当前环境无法导出日志', 'error');
     }
   };
 
@@ -1245,7 +1258,25 @@ export default function App() {
               onResetView={() => setResetTrigger((n) => n + 1)}
               resetTrigger={resetTrigger}
               onStart={() => navigateToSection('blocks')}
+              onOpenGuide={() => navigateToSection('guide')}
             />
+          </AppErrorBoundary>
+        )}
+
+        {activeSection === 'guide' && (
+          <AppErrorBoundary resetKey={`guide-${language}`}>
+            <Suspense
+              fallback={
+                <div className="flex min-h-[480px] items-center justify-center rounded-[8px] border border-line bg-surface text-[13px] text-ink-dim">
+                  {t('editor.loading')}
+                </div>
+              }
+            >
+              <UsageGuidePage
+                onBack={() => navigateToSection('overview')}
+                onOpenStudio={() => navigateToSection('blocks')}
+              />
+            </Suspense>
           </AppErrorBoundary>
         )}
 
@@ -1278,7 +1309,6 @@ export default function App() {
               terminalLogs={terminalLogs}
               terminalContainerRef={terminalContainerRef}
               onClearLogs={() => setTerminalLogs([])}
-              onExportLogs={handleExportLogs}
               replInput={replInput}
               onReplInputChange={setReplInput}
               onSendCommand={handleSendCommand}
